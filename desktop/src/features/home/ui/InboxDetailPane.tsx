@@ -1,11 +1,8 @@
 import {
-  ArrowUpRight,
   CheckCheck,
-  CircleDot,
   Mail,
   MailOpen,
   MoreHorizontal,
-  Reply,
   Trash2,
 } from "lucide-react";
 import * as React from "react";
@@ -48,7 +45,6 @@ type InboxDetailPaneProps = {
   messages?: InboxContextMessage[];
   replies?: InboxReply[];
   onDelete: () => void;
-  onOpenChannel: (channelId: string) => void;
   onSendReply: (input: {
     content: string;
     mediaTags?: string[][];
@@ -93,13 +89,14 @@ export function InboxDetailPane({
   messages = [],
   replies = [],
   onDelete,
-  onOpenChannel,
   onSendReply,
   onToggleDone,
   onToggleReaction,
 }: InboxDetailPaneProps) {
   const detailPaneRef = React.useRef<HTMLElement | null>(null);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
+  const [isFocusHighlightVisible, setIsFocusHighlightVisible] =
+    React.useState(true);
   const selectedItemId = item?.id ?? null;
 
   const focusComposer = React.useCallback(() => {
@@ -115,6 +112,18 @@ export function InboxDetailPane({
   React.useEffect(() => {
     void selectedItemId;
     setReplyTargetId(null);
+  }, [selectedItemId]);
+
+  React.useEffect(() => {
+    void selectedItemId;
+    setIsFocusHighlightVisible(true);
+    const timeoutId = window.setTimeout(() => {
+      setIsFocusHighlightVisible(false);
+    }, 1_200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [selectedItemId]);
 
   if (!item) {
@@ -136,7 +145,6 @@ export function InboxDetailPane({
     );
   }
 
-  const channelId = item.item.channelId;
   const selectedMessage = messages.find((message) => message.isSelected);
   const pendingReplyMessages: InboxDisplayMessage[] = replies.map((reply) => ({
     ...reply,
@@ -160,7 +168,6 @@ export function InboxDetailPane({
           },
           ...pendingReplyMessages,
         ];
-  const hasConversationContext = displayMessages.length > 1;
   const replyTarget =
     displayMessages.find((message) => message.id === replyTargetId) ?? null;
   const composerParentEventId = replyTarget?.id ?? item.id;
@@ -186,129 +193,98 @@ export function InboxDetailPane({
       data-testid="home-inbox-detail"
       ref={detailPaneRef}
     >
-      <div className="px-6 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <UserAvatar
-              avatarUrl={item.avatarUrl}
-              className="h-10 w-10 rounded-md"
-              displayName={item.senderLabel}
-              size="md"
-            />
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <p className="truncate text-base font-semibold">
-                  {item.senderLabel}
-                </p>
-                <span
-                  className={cn(
-                    "inline-flex items-center text-[10px] font-semibold uppercase tracking-[0.14em]",
-                    item.isActionRequired
-                      ? "text-amber-600 dark:text-amber-300"
-                      : "text-primary",
-                  )}
-                >
-                  {item.categoryLabel}
-                </span>
-                {item.channelLabel ? (
-                  <span className="inline-flex items-center text-[11px] font-medium text-muted-foreground">
-                    #{item.channelLabel}
+      {!canOpenChannel ? (
+        <div className="px-6 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <UserAvatar
+                avatarUrl={item.avatarUrl}
+                className="h-8 w-8 rounded-xl"
+                displayName={item.senderLabel}
+                size="md"
+              />
+              <div className="min-w-0">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <p className="truncate text-base font-semibold">
+                    {item.senderLabel}
+                  </p>
+                  <span
+                    className={cn(
+                      "inline-flex items-center text-[10px] font-semibold uppercase tracking-[0.14em]",
+                      item.isActionRequired
+                        ? "text-amber-600 dark:text-amber-300"
+                        : "text-primary",
+                    )}
+                  >
+                    {item.categoryLabel}
                   </span>
-                ) : null}
-              </div>
+                  {item.channelLabel ? (
+                    <span className="inline-flex items-center text-[11px] font-medium text-muted-foreground">
+                      #{item.channelLabel}
+                    </span>
+                  ) : null}
+                </div>
 
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <span>{item.fullTimestampLabel}</span>
-                {canOpenChannel ? <CircleDot className="h-3.5 w-3.5" /> : null}
-                {canOpenChannel ? (
-                  <span>Linked to an active channel</span>
-                ) : (
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                  <span>{item.fullTimestampLabel}</span>
                   <span>Inbox only</span>
-                )}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex shrink-0 items-center gap-4">
-            <TooltipProvider delayDuration={200}>
-              <div className="flex items-center gap-4">
-                {canReply ? (
+            <div className="flex shrink-0 items-center gap-4">
+              <TooltipProvider delayDuration={200}>
+                <div className="flex items-center gap-4">
                   <div className="flex items-center gap-0.5">
                     <HeaderIconAction
-                      label="Reply"
-                      onClick={() => {
-                        setReplyTargetId(null);
-                        focusComposer();
-                      }}
-                      icon={<Reply className="h-4 w-4" />}
+                      label={isDone ? "Mark unread" : "Mark done"}
+                      onClick={onToggleDone}
+                      icon={
+                        isDone ? (
+                          <MailOpen className="h-4 w-4" />
+                        ) : (
+                          <CheckCheck className="h-4 w-4" />
+                        )
+                      }
                     />
                   </div>
-                ) : null}
-                <div className="flex items-center gap-0.5">
-                  {canOpenChannel && channelId ? (
-                    <HeaderIconAction
-                      label="Open channel"
-                      onClick={() => onOpenChannel(channelId)}
-                      icon={<ArrowUpRight className="h-4 w-4" />}
+                  {canDelete ? (
+                    <HeaderMoreMenu
+                      isDeletingMessage={isDeletingMessage}
+                      onDelete={onDelete}
                     />
                   ) : null}
-                  <HeaderIconAction
-                    label={isDone ? "Mark unread" : "Mark done"}
-                    onClick={onToggleDone}
-                    icon={
-                      isDone ? (
-                        <MailOpen className="h-4 w-4" />
-                      ) : (
-                        <CheckCheck className="h-4 w-4" />
-                      )
-                    }
-                  />
                 </div>
-                {canDelete ? (
-                  <HeaderMoreMenu
-                    isDeletingMessage={isDeletingMessage}
-                    onDelete={onDelete}
-                  />
-                ) : null}
-              </div>
-            </TooltipProvider>
+              </TooltipProvider>
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <div className="absolute inset-0 overflow-y-auto overscroll-contain pb-32 pt-6">
           <div>
-            <div className="px-6 pb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              {hasConversationContext
-                ? "Conversation context"
-                : item.categoryLabel}
-              {isThreadContextLoading ? (
-                <span className="ml-2 font-normal normal-case tracking-normal">
-                  Loading context...
-                </span>
-              ) : null}
-            </div>
-            {displayMessages.map((message) => (
-              <div className="px-6 py-2" key={message.id}>
-                <div
-                  className="relative"
-                  style={{
-                    marginLeft: `${Math.min(message.depth, 6) * 28}px`,
-                  }}
-                >
-                  {message.depth > 0 ? (
-                    <div
-                      aria-hidden="true"
-                      className="absolute bottom-0 top-0 border-l border-border/70"
-                      style={{ left: "-14px" }}
-                    />
-                  ) : null}
+            {isThreadContextLoading ? (
+              <div className="px-6 pb-3 text-[11px] text-muted-foreground">
+                Loading context...
+              </div>
+            ) : null}
+            {displayMessages.map((message, index) => (
+              <React.Fragment key={message.id}>
+                {index === 1 ? (
+                  <div className="mx-6 my-3 border-t border-border/60" />
+                ) : null}
+                <div className="px-6 py-2">
                   <article
                     className={cn(
-                      "group/message flex items-start gap-2.5 rounded-xl border-l-2 px-2 py-1 transition-colors",
+                      "group/message flex items-start gap-2.5 border-l-2 px-2 py-1 transition-colors duration-1000",
                       message.isSelected
-                        ? "border-primary/35 bg-muted/25"
+                        ? cn(
+                            "border-primary/35",
+                            isFocusHighlightVisible
+                              ? "bg-primary/[0.07]"
+                              : "bg-transparent",
+                          )
                         : "border-transparent hover:bg-muted/20",
                     )}
                     data-testid={
@@ -383,7 +359,7 @@ export function InboxDetailPane({
                     </div>
                   </article>
                 </div>
-              </div>
+              </React.Fragment>
             ))}
           </div>
         </div>

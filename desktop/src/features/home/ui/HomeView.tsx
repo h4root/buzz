@@ -104,7 +104,6 @@ type HomeViewProps = {
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
-  onOpenChannel: (channelId: string) => void;
   onRefresh: () => void;
 };
 
@@ -114,7 +113,6 @@ export function HomeView({
   errorMessage,
   currentPubkey,
   availableChannelIds,
-  onOpenChannel,
   onRefresh,
 }: HomeViewProps) {
   const [filter, setFilter] = React.useState<InboxFilter>("all");
@@ -371,7 +369,6 @@ export function HomeView({
                 setIsDeletingMessage(false);
               });
           }}
-          onOpenChannel={onOpenChannel}
           onSendReply={async ({
             content,
             mediaTags,
