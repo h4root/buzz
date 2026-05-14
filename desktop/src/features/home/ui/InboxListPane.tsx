@@ -98,12 +98,7 @@ export function InboxListPane({
                     <div className="flex items-start gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <p
-                            className={cn(
-                              "truncate text-sm text-foreground",
-                              isDone ? "font-normal" : "font-bold",
-                            )}
-                          >
+                          <p className="truncate text-sm font-semibold text-foreground">
                             {item.senderLabel}
                           </p>
                           {item.isActionRequired ? (
