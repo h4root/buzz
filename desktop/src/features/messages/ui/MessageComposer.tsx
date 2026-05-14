@@ -84,7 +84,6 @@ export function MessageComposer({
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
-  // ── Markdown content state (synced from Tiptap on every update) ──────
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
   contentRef.current = content;
@@ -102,7 +101,7 @@ export function MessageComposer({
   const previousDraftKeyRef = React.useRef<string | null>(null);
   const effectiveDraftKeyRef = React.useRef(effectiveDraftKey);
   effectiveDraftKeyRef.current = effectiveDraftKey;
-
+  const preEditContentRef = React.useRef<string | null>(null);
   const mentions = useMentions(channelId, undefined, profiles);
   const channelLinks = useChannelLinks();
   const emojiAutocomplete = useEmojiAutocomplete();
@@ -112,12 +111,10 @@ export function MessageComposer({
     typingRootEventId,
   );
 
-  // ── Media upload ─────────────────────────────────────────────────────
   // We pass a custom setter that both updates React state AND inserts
   // markdown into the Tiptap editor when media upload completes.
   const media = useMediaUpload();
 
-  // ── Stable refs for callbacks ────────────────────────────────────────
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
   const onSendRef = React.useRef(onSend);
@@ -129,7 +126,6 @@ export function MessageComposer({
   onEditSaveRef.current = onEditSave;
   editTargetRef.current = editTarget;
 
-  // ── Refs consumed by Tiptap's submitOnEnter extension ──────────────
   const isAutocompleteOpenRef = React.useRef(false);
   isAutocompleteOpenRef.current =
     mentions.isMentionOpen ||
@@ -138,7 +134,6 @@ export function MessageComposer({
 
   const submitMessageRef = React.useRef<() => void>(() => {});
 
-  // ── Computed placeholder ─────────────────────────────────────────────
   const computedPlaceholder = editTarget
     ? "Edit your message"
     : (placeholder ??
@@ -146,7 +141,6 @@ export function MessageComposer({
         ? `Reply to ${replyTarget.author} in #${channelName}`
         : `Message #${channelName}`));
 
-  // ── Tiptap editor ───────────────────────────────────────────────────
   const richText = useRichTextEditor({
     placeholder: computedPlaceholder,
     editable: !disabled,
@@ -170,7 +164,6 @@ export function MessageComposer({
     },
   });
 
-  // ── Channel switching: save/restore drafts ──────────────────────────
   // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
   React.useEffect(() => {
     const prevKey = previousDraftKeyRef.current;
@@ -206,14 +199,21 @@ export function MessageComposer({
     };
   }, [effectiveDraftKey]);
 
-  // ── Edit mode: pre-fill content ─────────────────────────────────────
   // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger
   React.useEffect(() => {
-    if (!editTarget) return;
-    setContent(editTarget.body);
-    contentRef.current = editTarget.body;
-    richText.setContent(editTarget.body);
-    richText.focus();
+    if (editTarget) {
+      preEditContentRef.current = contentRef.current;
+      setContent(editTarget.body);
+      contentRef.current = editTarget.body;
+      richText.setContent(editTarget.body);
+      richText.focus();
+    } else if (preEditContentRef.current !== null) {
+      const restored = preEditContentRef.current;
+      preEditContentRef.current = null;
+      setContent(restored);
+      contentRef.current = restored;
+      restored ? richText.setContent(restored) : richText.clearContent();
+    }
   }, [editTarget?.id]);
 
   // ── Focus on reply ──────────────────────────────────────────────────

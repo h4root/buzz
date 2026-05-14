@@ -61,9 +61,14 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/shared/ui/sidebar";
-import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 
-type AppView = "home" | "channel" | "agents" | "workflows" | "pulse";
+type AppView =
+  | "home"
+  | "channel"
+  | "agents"
+  | "workflows"
+  | "pulse"
+  | "projects";
 
 const LazySettingsScreen = React.lazy(async () => {
   const module = await import("@/features/settings/ui/SettingsScreen");
@@ -129,6 +134,13 @@ function deriveShellRoute(pathname: string): {
     };
   }
 
+  if (pathname === "/projects" || pathname.startsWith("/projects/")) {
+    return {
+      selectedChannelId: null,
+      selectedView: "projects",
+    };
+  }
+
   if (pathname === "/pulse") {
     return {
       selectedChannelId: null,
@@ -161,8 +173,15 @@ export function AppShell() {
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
   const location = useLocation();
   const queryClient = useQueryClient();
-  const { goAgents, goChannel, goHome, goPulse, goWorkflows, openSearchHit } =
-    useAppNavigation();
+  const {
+    goAgents,
+    goChannel,
+    goHome,
+    goProjects,
+    goPulse,
+    goWorkflows,
+    openSearchHit,
+  } = useAppNavigation();
   const { canGoBack, canGoForward, goBack, goForward } =
     useBackForwardControls();
   const { selectedChannelId, selectedView } = React.useMemo(
@@ -245,20 +264,21 @@ export function AppShell() {
     [channels, selectedChannelId],
   );
 
-  const { markChannelRead, unreadChannelIds } = useUnreadChannels(
-    channels,
-    activeChannel,
-    // Wait for ChannelScreen to report the latest loaded message before
-    // advancing unread state for the active channel.
-    null,
-    {
-      pubkey: identityQuery.data?.pubkey,
-      relayClient,
-      currentPubkey: identityQuery.data?.pubkey,
-      onDmMessage: handleDmNotification,
-      onLiveMention: refetchHomeFeedOnLiveMention,
-    },
-  );
+  const { markChannelRead, markChannelUnread, unreadChannelIds } =
+    useUnreadChannels(
+      channels,
+      activeChannel,
+      // Wait for ChannelScreen to report the latest loaded message before
+      // advancing unread state for the active channel.
+      null,
+      {
+        pubkey: identityQuery.data?.pubkey,
+        relayClient,
+        currentPubkey: identityQuery.data?.pubkey,
+        onDmMessage: handleDmNotification,
+        onLiveMention: refetchHomeFeedOnLiveMention,
+      },
+    );
 
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
@@ -579,11 +599,6 @@ export function AppShell() {
                     <ChevronRight className="h-3 w-3" />
                   </Button>
                 </div>
-                <div className="fixed right-[16px] top-[8px] z-50">
-                  <UpdateIndicator
-                    onOpenUpdates={() => handleOpenSettings("updates")}
-                  />
-                </div>
                 <AppSidebar
                   activeWorkspace={workspacesHook.activeWorkspace}
                   channels={sidebarChannels}
@@ -654,6 +669,7 @@ export function AppShell() {
                     void applyAgents(templateId, createdForum.id);
                   }}
                   onHideDm={handleHideDm}
+                  onMarkChannelUnread={markChannelUnread}
                   onOpenBrowseChannels={handleOpenBrowseChannels}
                   onOpenBrowseForums={handleOpenBrowseForums}
                   onOpenDm={async ({ pubkeys }) => {
@@ -671,6 +687,9 @@ export function AppShell() {
                   }}
                   onSelectHome={() => {
                     void goHome();
+                  }}
+                  onSelectProjects={() => {
+                    void goProjects();
                   }}
                   onSelectPulse={() => {
                     void goPulse();

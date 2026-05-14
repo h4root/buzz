@@ -3,6 +3,7 @@ import {
   Bot,
   CircleDot,
   FileText,
+  FolderGit2,
   Hash,
   Inbox,
   Lock,
@@ -11,6 +12,7 @@ import {
 import type * as React from "react";
 
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
+import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 import { cn } from "@/shared/lib/cn";
 import { useSidebar } from "@/shared/ui/sidebar";
 
@@ -20,7 +22,7 @@ type ChatHeaderProps = {
   description?: string;
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
-  mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
+  mode?: "home" | "channel" | "agents" | "workflows" | "pulse" | "projects";
   overlaysContent?: boolean;
   statusBadge?: React.ReactNode;
 };
@@ -34,7 +36,7 @@ function ChannelIcon({
 }: {
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
-  mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
+  mode?: "home" | "channel" | "agents" | "workflows" | "pulse" | "projects";
 }) {
   if (mode === "home") {
     return <Inbox className={HEADER_ICON_CLASS} />;
@@ -50,6 +52,10 @@ function ChannelIcon({
 
   if (mode === "pulse") {
     return <Activity className={HEADER_ICON_CLASS} />;
+  }
+
+  if (mode === "projects") {
+    return <FolderGit2 className={HEADER_ICON_CLASS} />;
   }
 
   if (channelType === "dm") {
@@ -113,7 +119,10 @@ export function ChatHeader({
         </div>
       </div>
 
-      {actions ? <div className="shrink-0">{actions}</div> : null}
+      <div className="flex shrink-0 items-center gap-1">
+        <UpdateIndicator />
+        {actions ? <div className="shrink-0">{actions}</div> : null}
+      </div>
     </header>
   );
 }
