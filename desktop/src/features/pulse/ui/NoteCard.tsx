@@ -44,8 +44,8 @@ export function NoteCard({
   const avatarUrl = profile?.avatarUrl ?? null;
 
   return (
-    <article className="group flex gap-3 border-b border-border/50 px-4 py-3 transition-colors hover:bg-muted/30 sm:px-6">
-      <div className="relative shrink-0 pt-0.5">
+    <article className="group flex gap-3 rounded-2xl px-1 py-4 transition-colors hover:bg-muted/20 sm:px-2">
+      <div className="relative shrink-0 pt-1">
         <UserAvatar avatarUrl={avatarUrl} displayName={displayName} />
         {isAgent ? (
           <Bot className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-background p-0.5 text-muted-foreground" />
@@ -54,7 +54,9 @@ export function NoteCard({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-semibold">{displayName}</span>
+          <span className="truncate text-sm font-semibold leading-none">
+            {displayName}
+          </span>
           {isAgent ? (
             <span className="inline-flex h-4 items-center rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
               bot
@@ -65,14 +67,14 @@ export function NoteCard({
               {profile.nip05Handle}
             </span>
           ) : null}
-          <span className="shrink-0 text-xs text-muted-foreground">
+          <span className="shrink-0 text-[11px] text-muted-foreground">
             {formatRelativeTime(note.createdAt)}
           </span>
           {!isOwnNote ? (
             <div className="ml-auto hidden shrink-0 group-hover:block">
               {isFollowing ? (
                 <Button
-                  className="h-6 gap-1 px-2 text-xs"
+                  className="h-6 gap-1 px-2 text-xs text-muted-foreground"
                   onClick={() => onUnfollow?.(note.pubkey)}
                   size="sm"
                   variant="ghost"
@@ -82,7 +84,7 @@ export function NoteCard({
                 </Button>
               ) : (
                 <Button
-                  className="h-6 gap-1 px-2 text-xs"
+                  className="h-6 gap-1 px-2 text-xs text-muted-foreground"
                   onClick={() => onFollow?.(note.pubkey)}
                   size="sm"
                   variant="ghost"
@@ -95,9 +97,31 @@ export function NoteCard({
           ) : null}
         </div>
 
-        <div className="mt-1 text-sm leading-relaxed">
+        <div className="mt-1.5 text-sm leading-relaxed text-foreground">
           <Markdown content={note.content} />
         </div>
+
+        {!isOwnNote ? (
+          <div className="mt-2 flex items-center gap-3 text-[11px] font-medium text-muted-foreground">
+            {isFollowing ? (
+              <button
+                className="hover:text-foreground"
+                onClick={() => onUnfollow?.(note.pubkey)}
+                type="button"
+              >
+                Unfollow
+              </button>
+            ) : (
+              <button
+                className="hover:text-foreground"
+                onClick={() => onFollow?.(note.pubkey)}
+                type="button"
+              >
+                Follow
+              </button>
+            )}
+          </div>
+        ) : null}
       </div>
     </article>
   );

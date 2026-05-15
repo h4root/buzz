@@ -30,11 +30,12 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 type PulseTab = "foryou" | "people" | "agents" | "mine";
 
 const tabTriggerClassName =
-  "rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm font-medium shadow-none transition-colors data-[state=active]:border-primary data-[state=active]:text-foreground data-[state=active]:shadow-none text-muted-foreground hover:text-foreground data-[state=active]:bg-transparent";
+  "h-6 rounded-full px-3 py-0 text-[11px] font-semibold shadow-none transition-colors text-muted-foreground hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm";
 
 type PulseViewProps = {
   currentPubkey?: string;
@@ -42,7 +43,7 @@ type PulseViewProps = {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-12 text-center">
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border/60 px-4 py-12 text-center">
       <p className="text-sm text-muted-foreground">{message}</p>
     </div>
   );
@@ -50,9 +51,9 @@ function EmptyState({ message }: { message: string }) {
 
 function TimelineSkeleton() {
   return (
-    <div className="space-y-1">
+    <div className="space-y-5">
       {[1, 2, 3, 4].map((i) => (
-        <div className="flex gap-3 px-4 py-3 sm:px-6" key={i}>
+        <div className="flex gap-3 px-1 py-2 sm:px-2" key={i}>
           <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
           <div className="min-w-0 flex-1 space-y-2">
             <Skeleton className="h-3.5 w-32" />
@@ -242,6 +243,12 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     enabled: forYouPubkeys.length > 0,
   });
   const mentionProfiles = mentionProfilesQuery.data?.profiles ?? {};
+  const currentProfile = currentPubkey
+    ? (mentionProfiles[currentPubkey.toLowerCase()] ?? null)
+    : null;
+  const currentDisplayName =
+    currentProfile?.displayName ??
+    (currentPubkey ? `${currentPubkey.slice(0, 8)}...` : "You");
 
   const pulseMentionMembers = React.useMemo<ChannelMember[]>(() => {
     const members: ChannelMember[] = [];
@@ -337,47 +344,49 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
         {/* Tab bar */}
-        <div className="flex items-center gap-1 border-b border-border/60 px-4 pt-11 sm:px-6">
-          <TabsList className="h-auto gap-1 rounded-none border-none bg-transparent p-0">
-            <TabsTrigger value="foryou" className={tabTriggerClassName}>
-              For You
-            </TabsTrigger>
-            <TabsTrigger value="people" className={tabTriggerClassName}>
-              People
-            </TabsTrigger>
-            <TabsTrigger value="agents" className={tabTriggerClassName}>
-              Agents
-              {relayAgents.length > 0 ? (
-                <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-                  {relayAgents.length}
-                </span>
-              ) : null}
-            </TabsTrigger>
-            <TabsTrigger value="mine" className={tabTriggerClassName}>
-              My Notes
-            </TabsTrigger>
-          </TabsList>
+        <div className="shrink-0 px-4 pt-11 sm:px-6">
+          <div className="relative mx-auto flex w-full max-w-2xl items-center justify-center">
+            <TabsList className="h-7 gap-0.5 rounded-full border border-border/50 bg-muted/40 p-0.5">
+              <TabsTrigger value="foryou" className={tabTriggerClassName}>
+                Everyone
+              </TabsTrigger>
+              <TabsTrigger value="people" className={tabTriggerClassName}>
+                Following
+              </TabsTrigger>
+              <TabsTrigger value="agents" className={tabTriggerClassName}>
+                Agents
+                {relayAgents.length > 0 ? (
+                  <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                    {relayAgents.length}
+                  </span>
+                ) : null}
+              </TabsTrigger>
+              <TabsTrigger value="mine" className={tabTriggerClassName}>
+                Mine
+              </TabsTrigger>
+            </TabsList>
 
-          <div className="ml-auto flex items-center gap-1">
-            {activeTab === "agents" && relayAgents.length > 1 ? (
-              <AgentFilter
-                agents={relayAgents}
-                onSelect={setAgentFilter}
-                profiles={profiles}
-                selectedPubkey={agentFilter}
-              />
-            ) : null}
-            <Button
-              className="h-7 w-7"
-              disabled={isRefetching}
-              onClick={handleRefresh}
-              size="icon"
-              variant="ghost"
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`}
-              />
-            </Button>
+            <div className="absolute right-0 flex items-center gap-1">
+              {activeTab === "agents" && relayAgents.length > 1 ? (
+                <AgentFilter
+                  agents={relayAgents}
+                  onSelect={setAgentFilter}
+                  profiles={profiles}
+                  selectedPubkey={agentFilter}
+                />
+              ) : null}
+              <Button
+                className="h-7 w-7"
+                disabled={isRefetching}
+                onClick={handleRefresh}
+                size="icon"
+                variant="ghost"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`}
+                />
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -387,28 +396,51 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
           forceMount
           className="mt-0 min-h-0 flex-1 overflow-y-auto"
         >
-          {renderTimeline()}
+          <div className="mx-auto flex w-full max-w-2xl flex-col px-4 pb-10 pt-7 sm:px-6">
+            {activeTab !== "agents" ? (
+              <div className="mb-7 flex items-start gap-3">
+                <div className="shrink-0 pt-1">
+                  <UserAvatar
+                    avatarUrl={currentProfile?.avatarUrl ?? null}
+                    displayName={currentDisplayName}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold leading-none">
+                      {currentDisplayName}
+                    </span>
+                  </div>
+                  {publishMutation.isError && (
+                    <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                      {publishMutation.error instanceof Error
+                        ? publishMutation.error.message
+                        : "Failed to publish note"}
+                    </div>
+                  )}
+                  <ForumComposer
+                    autocompleteBelow
+                    className="rounded-xl border-border/60 bg-muted/30 px-3 py-2 shadow-none"
+                    members={pulseMentionMembers}
+                    placeholder="What's on your mind?"
+                    isSending={publishMutation.isPending}
+                    onSubmit={(content, mentionPubkeys, mediaTags) =>
+                      publishMutation.mutateAsync({
+                        content,
+                        mentionPubkeys,
+                        mediaTags,
+                      })
+                    }
+                    profiles={mentionProfiles}
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="space-y-1">{renderTimeline()}</div>
+          </div>
         </TabsContent>
       </Tabs>
-
-      <div className="border-t border-border/60 px-4 py-3 sm:px-6">
-        {publishMutation.isError && (
-          <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {publishMutation.error instanceof Error
-              ? publishMutation.error.message
-              : "Failed to publish note"}
-          </div>
-        )}
-        <ForumComposer
-          members={pulseMentionMembers}
-          placeholder="Post to Pulse..."
-          isSending={publishMutation.isPending}
-          onSubmit={(content, mentionPubkeys, mediaTags) =>
-            publishMutation.mutateAsync({ content, mentionPubkeys, mediaTags })
-          }
-          profiles={mentionProfiles}
-        />
-      </div>
     </div>
   );
 }

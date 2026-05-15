@@ -26,11 +26,13 @@ import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerTo
 import type { ChannelMember } from "@/shared/api/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
+import { cn } from "@/shared/lib/cn";
 
 type ForumComposerProps = {
   channelId?: string | null;
   /** Override mention source when no channel is available (e.g. Pulse). */
   members?: ChannelMember[];
+  className?: string;
   placeholder: string;
   disabled?: boolean;
   isSending?: boolean;
@@ -48,6 +50,7 @@ type ForumComposerProps = {
 export function ForumComposer({
   channelId = null,
   members,
+  className,
   placeholder,
   disabled,
   isSending,
@@ -339,7 +342,10 @@ export function ForumComposer({
 
   return (
     <form
-      className="relative rounded-2xl border border-input bg-card px-3 py-2 sm:px-4"
+      className={cn(
+        "relative rounded-2xl border border-input bg-card px-3 py-2 sm:px-4",
+        className,
+      )}
       onDragEnter={media.handleDragEnter}
       onDragLeave={media.handleDragLeave}
       onDragOver={media.handleDragOver}
