@@ -177,13 +177,13 @@ function ChannelLoadingBody() {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 py-3 sm:px-6">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+        <div className="flex w-full flex-col gap-4">
           <MessageRowsSkeleton />
         </div>
       </div>
 
       <div className="border-t border-border/60 bg-background px-4 py-4 sm:px-6">
-        <div className="mx-auto w-full max-w-4xl space-y-3">
+        <div className="w-full space-y-3">
           <Skeleton className="h-10 w-full rounded-2xl" />
           <div className="flex items-center gap-2">
             <Skeleton className="h-8 w-20 rounded-lg" />
