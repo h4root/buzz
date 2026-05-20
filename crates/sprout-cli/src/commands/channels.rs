@@ -1,6 +1,8 @@
 use uuid::Uuid;
 
-use crate::client::{extract_d_tag, extract_p_tags, normalize_write_response, print_create_response, SproutClient};
+use crate::client::{
+    extract_d_tag, extract_p_tags, normalize_write_response, print_create_response, SproutClient,
+};
 use crate::error::CliError;
 use crate::validate::{parse_uuid, read_or_stdin, validate_hex64, validate_uuid};
 
@@ -103,7 +105,8 @@ pub async fn cmd_get_channel(client: &SproutClient, channel_id: &str) -> Result<
     let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
     if let Some(e) = events.first() {
         let mut normalized = extract_channel_metadata(e);
-        normalized["pubkey"] = serde_json::json!(e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""));
+        normalized["pubkey"] =
+            serde_json::json!(e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""));
         println!("{normalized}");
     } else {
         println!("null");
@@ -123,10 +126,7 @@ pub async fn cmd_list_channel_members(
     });
     let resp = client.query(&filter).await?;
     let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
-    let members = events
-        .first()
-        .map(extract_p_tags)
-        .unwrap_or_default();
+    let members = events.first().map(extract_p_tags).unwrap_or_default();
     let output = serde_json::to_string(&members).unwrap_or_default();
     println!("{output}");
     Ok(())
@@ -140,7 +140,11 @@ pub async fn cmd_get_canvas(client: &SproutClient, channel_id: &str) -> Result<(
     });
     let resp = client.query(&filter).await?;
     let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
-    if let Some(content) = events.first().and_then(|e| e.get("content")).and_then(|c| c.as_str()) {
+    if let Some(content) = events
+        .first()
+        .and_then(|e| e.get("content"))
+        .and_then(|c| c.as_str())
+    {
         println!("{content}");
     } else {
         println!("null");

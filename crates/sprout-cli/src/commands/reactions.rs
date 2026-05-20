@@ -107,7 +107,9 @@ pub async fn cmd_get_reactions(client: &SproutClient, event_id: &str) -> Result<
         })
         .collect();
     reactions.sort_by(|a, b| {
-        a.get("emoji").and_then(|v| v.as_str()).unwrap_or("")
+        a.get("emoji")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
             .cmp(b.get("emoji").and_then(|v| v.as_str()).unwrap_or(""))
     });
 

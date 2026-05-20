@@ -63,11 +63,9 @@ pub async fn cmd_open_dm(client: &SproutClient, pubkeys: &[String]) -> Result<()
     use nostr::{EventBuilder, Kind, Tag};
     let mut tags: Vec<Tag> = refs
         .iter()
-        .map(|pk| Tag::parse(&["p", pk])
-            .map_err(|e| CliError::Other(format!("tag error: {e}"))))
+        .map(|pk| Tag::parse(&["p", pk]).map_err(|e| CliError::Other(format!("tag error: {e}"))))
         .collect::<Result<Vec<_>, _>>()?;
-    tags.push(Tag::parse(&["d", &dm_id])
-        .map_err(|e| CliError::Other(format!("tag error: {e}")))?);
+    tags.push(Tag::parse(&["d", &dm_id]).map_err(|e| CliError::Other(format!("tag error: {e}")))?);
     let builder = EventBuilder::new(Kind::Custom(41010), "", tags);
     let event = client.sign_event(builder)?;
 
