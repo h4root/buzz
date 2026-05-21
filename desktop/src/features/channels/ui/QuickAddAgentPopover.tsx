@@ -225,39 +225,44 @@ export function QuickAddAgentPopover({
     return result;
   }, [managedAgents, personas, channelMemberPubkeys, recentIds]);
 
-  // Snapshot item order when popover opens — don't reorder while open
-  const [stableItems, setStableItems] = React.useState<QuickAddAgentItem[]>([]);
-  React.useEffect(() => {
-    if (open) {
-      setStableItems(items);
-    }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Frozen key order — captured once when popover opens, used for rendering
+  const frozenKeysRef = React.useRef<string[]>([]);
+  const prevOpenRef = React.useRef(false);
+  if (open && !prevOpenRef.current) {
+    // Popover just opened — freeze the current key order
+    frozenKeysRef.current = items.map(getItemKey);
+  }
+  prevOpenRef.current = open;
 
-  // Merge live data (kind changes) into stable order while keeping positions
+  // Render items in frozen order, prepend any new ones
   const displayItems = React.useMemo(() => {
     if (!open) return items;
+    const frozenKeys = frozenKeysRef.current;
     const liveMap = new Map(items.map((item) => [getItemKey(item), item]));
-    // Keep stable order, update each item with live data
-    const stable: QuickAddAgentItem[] = [];
-    const seen = new Set<string>();
-    for (const stableItem of stableItems) {
-      const key = getItemKey(stableItem);
+
+    // Existing items in frozen order (with live data)
+    const ordered: QuickAddAgentItem[] = [];
+    for (const key of frozenKeys) {
       const liveItem = liveMap.get(key);
       if (liveItem) {
-        stable.push(liveItem);
-        seen.add(key);
+        ordered.push(liveItem);
       }
     }
-    // Prepend any new items (e.g. newly created agents) at the top
+
+    // New items (not in frozen snapshot) prepend to top
+    const frozenSet = new Set(frozenKeys);
     const newItems: QuickAddAgentItem[] = [];
     for (const item of items) {
       const key = getItemKey(item);
-      if (!seen.has(key)) {
+      if (!frozenSet.has(key)) {
         newItems.push(item);
+        // Add to frozen keys so they stay in position on subsequent renders
+        frozenKeysRef.current = [key, ...frozenKeysRef.current];
       }
     }
-    return [...newItems, ...stable];
-  }, [open, stableItems, items]);
+
+    return [...newItems, ...ordered];
+  }, [open, items]);
 
   // Reset state when popover closes
   React.useEffect(() => {
