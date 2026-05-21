@@ -225,13 +225,6 @@ export function QuickAddAgentPopover({
     return result;
   }, [managedAgents, personas, channelMemberPubkeys, recentIds]);
 
-  // Debounce item list so rapid query invalidations (name + membership) batch
-  const [debouncedItems, setDebouncedItems] = React.useState(items);
-  React.useEffect(() => {
-    const timer = setTimeout(() => setDebouncedItems(items), 300);
-    return () => clearTimeout(timer);
-  }, [items]);
-
 
   // Reset state when popover closes
   React.useEffect(() => {
@@ -614,7 +607,7 @@ export function QuickAddAgentPopover({
               <div className="flex items-center justify-center py-6">
                 <Spinner className="h-4 w-4 text-muted-foreground" />
               </div>
-            ) : debouncedItems.length === 0 ? (
+            ) : items.length === 0 ? (
               <div className="px-3 py-4 text-center text-sm text-muted-foreground">
                 No agents available.
               </div>
@@ -624,7 +617,7 @@ export function QuickAddAgentPopover({
                 className="py-1"
                 role="listbox"
               >
-                {debouncedItems.map((item) => {
+                {items.map((item) => {
                   const itemKey = getItemKey(item);
                   const isInChannel = item.kind === "running-in-channel";
                   const isItemPending =
@@ -632,7 +625,7 @@ export function QuickAddAgentPopover({
                   const isSelected = selectedKeys.has(itemKey);
 
                   return (
-                    <motion.div key={itemKey} layout="position" transition={{ type: "spring", stiffness: 500, damping: 35, mass: 0.8 }}>
+                    <motion.div key={itemKey} layout transition={{ duration: 0.2 }}>
                     <button
                       aria-selected={isInChannel || isSelected}
                       className={cn(
