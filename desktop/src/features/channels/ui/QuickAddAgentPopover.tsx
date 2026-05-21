@@ -178,12 +178,12 @@ export function QuickAddAgentPopover({
       return aScore - bScore;
     });
 
-    for (const agent of sortedRunningAvailable) {
+    for (const agent of runningInChannel) {
       const persona = agent.personaId
         ? (personas.find((p) => p.id === agent.personaId) ?? null)
         : null;
       result.push({
-        kind: "running-available",
+        kind: "running-in-channel",
         agent,
         persona,
         label: agent.name,
@@ -191,12 +191,12 @@ export function QuickAddAgentPopover({
       });
     }
 
-    for (const agent of runningInChannel) {
+    for (const agent of sortedRunningAvailable) {
       const persona = agent.personaId
         ? (personas.find((p) => p.id === agent.personaId) ?? null)
         : null;
       result.push({
-        kind: "running-in-channel",
+        kind: "running-available",
         agent,
         persona,
         label: agent.name,
@@ -225,44 +225,6 @@ export function QuickAddAgentPopover({
     return result;
   }, [managedAgents, personas, channelMemberPubkeys, recentIds]);
 
-  // Frozen key order — captured once when popover opens, used for rendering
-  const frozenKeysRef = React.useRef<string[]>([]);
-  const prevOpenRef = React.useRef(false);
-  if (open && !prevOpenRef.current) {
-    // Popover just opened — freeze the current key order
-    frozenKeysRef.current = items.map(getItemKey);
-  }
-  prevOpenRef.current = open;
-
-  // Render items in frozen order, prepend any new ones
-  const displayItems = React.useMemo(() => {
-    if (!open) return items;
-    const frozenKeys = frozenKeysRef.current;
-    const liveMap = new Map(items.map((item) => [getItemKey(item), item]));
-
-    // Existing items in frozen order (with live data)
-    const ordered: QuickAddAgentItem[] = [];
-    for (const key of frozenKeys) {
-      const liveItem = liveMap.get(key);
-      if (liveItem) {
-        ordered.push(liveItem);
-      }
-    }
-
-    // New items (not in frozen snapshot) prepend to top
-    const frozenSet = new Set(frozenKeys);
-    const newItems: QuickAddAgentItem[] = [];
-    for (const item of items) {
-      const key = getItemKey(item);
-      if (!frozenSet.has(key)) {
-        newItems.push(item);
-        // Add to frozen keys so they stay in position on subsequent renders
-        frozenKeysRef.current = [key, ...frozenKeysRef.current];
-      }
-    }
-
-    return [...newItems, ...ordered];
-  }, [open, items]);
 
   // Reset state when popover closes
   React.useEffect(() => {
@@ -645,7 +607,7 @@ export function QuickAddAgentPopover({
               <div className="flex items-center justify-center py-6">
                 <Spinner className="h-4 w-4 text-muted-foreground" />
               </div>
-            ) : displayItems.length === 0 ? (
+            ) : items.length === 0 ? (
               <div className="px-3 py-4 text-center text-sm text-muted-foreground">
                 No agents available.
               </div>
@@ -655,7 +617,7 @@ export function QuickAddAgentPopover({
                 className="py-1"
                 role="listbox"
               >
-                {displayItems.map((item) => {
+                {items.map((item) => {
                   const itemKey = getItemKey(item);
                   const isInChannel = item.kind === "running-in-channel";
                   const isItemPending =
@@ -663,6 +625,7 @@ export function QuickAddAgentPopover({
                   const isSelected = selectedKeys.has(itemKey);
 
                   return (
+                    <motion.div key={itemKey} layout transition={{ duration: 0.2 }}>
                     <button
                       aria-selected={isInChannel || isSelected}
                       className={cn(
@@ -675,7 +638,6 @@ export function QuickAddAgentPopover({
                       )}
                       data-quick-add-item
                       disabled={!isInChannel && Boolean(pendingKey)}
-                      key={itemKey}
                       onClick={() => handleItemClick(item)}
                       role="option"
                       tabIndex={0}
@@ -729,6 +691,7 @@ export function QuickAddAgentPopover({
                         ) : null}
                       </div>
                     </button>
+                    </motion.div>
                   );
                 })}
               </div>
