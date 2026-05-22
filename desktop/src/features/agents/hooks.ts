@@ -13,6 +13,7 @@ import {
   discoverAcpProviders,
   discoverBackendProviders,
   discoverManagedAgentPrereqs,
+  getChannelMembers,
   getManagedAgentLog,
   listManagedAgents,
   listRelayAgents,
@@ -417,7 +418,18 @@ export function useCreateChannelManagedAgentMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return createChannelManagedAgent(channelId, input);
+      const [managedAgents, members] = await Promise.all([
+        listManagedAgents(),
+        getChannelMembers(channelId),
+      ]);
+      const channelMemberPubkeys = new Set(
+        members.map((m) => normalizePubkey(m.pubkey)),
+      );
+
+      return createChannelManagedAgent(channelId, input, {
+        managedAgents,
+        channelMemberPubkeys,
+      });
     },
     onSuccess: (result) => {
       if (!channelId) return;
