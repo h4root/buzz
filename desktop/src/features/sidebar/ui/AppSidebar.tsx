@@ -37,7 +37,6 @@ import type {
   UserStatus,
 } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
-import { Button } from "@/shared/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -124,7 +123,6 @@ type AppSidebarProps = {
   onOpenAddWorkspace: () => void;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
-  onOpenSearch: () => void;
   onHideDm: (channelId: string) => void;
   onMarkChannelUnread: (
     channelId: string,
@@ -341,7 +339,6 @@ export function AppSidebar({
   onOpenAddWorkspace,
   onOpenBrowseChannels,
   onOpenBrowseForums,
-  onOpenSearch,
   onHideDm,
   onMarkChannelUnread,
   onOpenDm,
@@ -462,33 +459,9 @@ export function AppSidebar({
       variant="sidebar"
     >
       <SidebarHeader
-        className="cursor-default select-none gap-3 pt-10"
+        className="cursor-default select-none gap-3 pt-12"
         data-tauri-drag-region
       >
-        <div className="px-0.5">
-          <WorkspaceSwitcher
-            activeWorkspace={activeWorkspace}
-            onAddWorkspace={onOpenAddWorkspace}
-            onRemoveWorkspace={onRemoveWorkspace}
-            onSwitchWorkspace={onSwitchWorkspace}
-            onUpdateWorkspace={onUpdateWorkspace}
-            workspaces={workspaces}
-          />
-        </div>
-        <Button
-          className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground"
-          data-testid="open-search"
-          onClick={onOpenSearch}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          <span className="flex items-center gap-2">
-            <Search className="h-4 w-4" />
-            Search messages
-          </span>
-          <span className="text-xs text-sidebar-foreground/50">&#x2318;K</span>
-        </Button>
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -709,21 +682,22 @@ export function AppSidebar({
                       />
                     </span>
                   </div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p
                       className="truncate text-sm font-semibold text-current"
                       data-testid="sidebar-profile-name"
                     >
                       {resolvedDisplayName}
                     </p>
-                    {selfUserStatus?.text || selfUserStatus?.emoji ? (
-                      <p className="truncate text-xs text-sidebar-foreground/50">
-                        {selfUserStatus.emoji ? (
-                          <span className="mr-1">{selfUserStatus.emoji}</span>
-                        ) : null}
-                        {selfUserStatus.text}
-                      </p>
-                    ) : null}
+                    <WorkspaceSwitcher
+                      activeWorkspace={activeWorkspace}
+                      onAddWorkspace={onOpenAddWorkspace}
+                      onRemoveWorkspace={onRemoveWorkspace}
+                      onSwitchWorkspace={onSwitchWorkspace}
+                      onUpdateWorkspace={onUpdateWorkspace}
+                      placement="footer"
+                      workspaces={workspaces}
+                    />
                   </div>
                 </div>
               </SidebarMenuButton>

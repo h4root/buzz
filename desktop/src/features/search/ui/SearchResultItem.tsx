@@ -1,22 +1,69 @@
 import type * as React from "react";
-import { ArrowRight, FileText, Hash, type LucideIcon } from "lucide-react";
+import { FileText, Hash, UserRound, type LucideIcon } from "lucide-react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 
 import {
   resolveUserLabel,
   resolveUserSecondaryLabel,
+  truncatePubkey,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
-import type { Channel, SearchHit } from "@/shared/api/types";
-import { Badge } from "@/shared/ui/badge";
-import { UserAvatar } from "@/shared/ui/UserAvatar";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import type { Channel, SearchHit, UserSearchResult } from "@/shared/api/types";
 
 export type SearchResult =
   | { kind: "channel"; channel: Channel }
-  | { kind: "message"; hit: SearchHit };
+  | { kind: "message"; hit: SearchHit }
+  | { kind: "user"; user: UserSearchResult };
+
+const INLINE_MARKDOWN_COMPONENTS: Components = {
+  a: ({ children }) => <span>{children}</span>,
+  blockquote: ({ children }) => <span>{children}</span>,
+  br: () => " ",
+  code: ({ children }) => <span>{children}</span>,
+  em: ({ children }) => <em>{children}</em>,
+  h1: ({ children }) => <span>{children}</span>,
+  h2: ({ children }) => <span>{children}</span>,
+  h3: ({ children }) => <span>{children}</span>,
+  h4: ({ children }) => <span>{children}</span>,
+  h5: ({ children }) => <span>{children}</span>,
+  h6: ({ children }) => <span>{children}</span>,
+  hr: () => null,
+  img: ({ alt, src }) => <span>{alt || src || "Image"}</span>,
+  li: ({ children }) => <span>{children} </span>,
+  ol: ({ children }) => <span>{children}</span>,
+  p: ({ children }) => <span>{children}</span>,
+  pre: ({ children }) => <span>{children}</span>,
+  strong: ({ children }) => <strong>{children}</strong>,
+  table: ({ children }) => <span>{children}</span>,
+  tbody: ({ children }) => <span>{children}</span>,
+  td: ({ children }) => <span>{children} </span>,
+  th: ({ children }) => <span>{children} </span>,
+  thead: ({ children }) => <span>{children}</span>,
+  tr: ({ children }) => <span>{children} </span>,
+  ul: ({ children }) => <span>{children}</span>,
+};
+
+function InlineMarkdownSnippet({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      components={INLINE_MARKDOWN_COMPONENTS}
+      remarkPlugins={[remarkGfm, remarkBreaks]}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
 
 export function resultKey(result: SearchResult) {
   if (result.kind === "channel") {
     return `channel-${result.channel.id}`;
+  }
+
+  if (result.kind === "user") {
+    return `user-${result.user.pubkey}`;
   }
 
   return `message-${result.hit.eventId}`;
@@ -27,6 +74,10 @@ export function resultTestId(result: SearchResult) {
     return `search-result-channel-${result.channel.id}`;
   }
 
+  if (result.kind === "user") {
+    return `search-result-user-${result.user.pubkey}`;
+  }
+
   return `search-result-${result.hit.eventId}`;
 }
 
@@ -34,6 +85,10 @@ export function resultIcon(
   result: SearchResult,
   channelLookup: ReadonlyMap<string, Channel>,
 ) {
+  if (result.kind === "user") {
+    return UserRound;
+  }
+
   const channelType =
     result.kind === "channel"
       ? result.channel.channelType
@@ -48,6 +103,7 @@ export function SearchResultShell({
   children,
   icon: Icon,
   isSelected,
+  leading,
   onClick,
   onMouseEnter,
   testId,
@@ -55,6 +111,7 @@ export function SearchResultShell({
   children: React.ReactNode;
   icon: LucideIcon;
   isSelected: boolean;
+  leading?: React.ReactNode;
   onClick: () => void;
   onMouseEnter: () => void;
   testId: string;
@@ -63,43 +120,94 @@ export function SearchResultShell({
     <button
       className={
         isSelected
-          ? "w-full rounded-2xl border border-primary/30 bg-primary/10 px-4 py-4 text-left shadow-sm outline-none transition-colors"
-          : "w-full rounded-2xl border border-border/80 bg-card/60 px-4 py-4 text-left shadow-sm outline-none transition-colors hover:border-primary/20 hover:bg-accent"
+          ? "w-full rounded-lg bg-primary/10 px-2.5 py-2 text-left outline-none transition-colors"
+          : "w-full rounded-lg px-2.5 py-2 text-left outline-none transition-colors hover:bg-accent"
       }
       data-testid={testId}
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       type="button"
     >
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
-          <Icon className="h-4 w-4" />
-        </div>
+      <div className="flex items-center gap-2.5">
+        {leading ?? (
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
+            <Icon className="h-3.5 w-3.5" />
+          </div>
+        )}
 
         {children}
-
-        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
       </div>
     </button>
   );
 }
 
+function formatUserName(user: UserSearchResult) {
+  return (
+    user.displayName?.trim() ||
+    user.nip05Handle?.trim() ||
+    truncatePubkey(user.pubkey)
+  );
+}
+
+function formatUserSecondary(user: UserSearchResult) {
+  const displayName = user.displayName?.trim();
+  const nip05Handle = user.nip05Handle?.trim();
+
+  if (displayName && nip05Handle) {
+    return nip05Handle;
+  }
+
+  return truncatePubkey(user.pubkey);
+}
+
 export function ChannelResultBody({ channel }: { channel: Channel }) {
+  const description = channel.description.trim();
+
   return (
     <div className="min-w-0 flex-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm font-semibold tracking-tight">{channel.name}</p>
-        <Badge variant="secondary">{channel.channelType}</Badge>
-        <p className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
-          Channel
+      <div className="flex items-center gap-2">
+        <p
+          className="truncate text-sm font-medium tracking-tight"
+          title={description || channel.name}
+        >
+          {channel.name}
+        </p>
+        <p className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          {channel.channelType}
         </p>
       </div>
-      {channel.description ? (
-        <p className="mt-2 text-sm leading-6 text-foreground">
-          {channel.description}
-        </p>
-      ) : null}
     </div>
+  );
+}
+
+export function UserResultBody({ user }: { user: UserSearchResult }) {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center gap-2">
+        <p
+          className="truncate text-sm font-medium tracking-tight"
+          title={formatUserSecondary(user)}
+        >
+          {formatUserName(user)}
+        </p>
+        <p className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          Person
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export function UserResultAvatar({ user }: { user: UserSearchResult }) {
+  const label = formatUserName(user);
+
+  return (
+    <ProfileAvatar
+      avatarUrl={user.avatarUrl}
+      className="h-6 w-6 rounded-md text-[9px] shadow-none"
+      iconClassName="h-3.5 w-3.5"
+      label={label}
+    />
   );
 }
 
@@ -177,36 +285,30 @@ export function MessageResultBody({
     pubkey: hit.pubkey,
     profiles: resultProfiles,
   });
-  const avatarUrl =
-    resultProfiles?.[hit.pubkey.toLowerCase()]?.avatarUrl ?? null;
+  const metadata = [
+    hit.channelName,
+    authorLabel,
+    formatRelativeTime(hit.createdAt),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const title = [metadata, authorSecondaryLabel, hit.content]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div className="min-w-0 flex-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm font-semibold tracking-tight">
-          {hit.channelName}
+      <div className="flex items-center gap-2">
+        <p
+          className="truncate text-sm font-medium tracking-tight"
+          title={title}
+        >
+          <InlineMarkdownSnippet content={truncateContent(hit.content)} />
         </p>
-        <Badge variant="secondary">{describeSearchHit(hit)}</Badge>
-        <span className="flex items-center gap-1 text-xs text-muted-foreground">
-          <UserAvatar
-            avatarUrl={avatarUrl}
-            displayName={authorLabel}
-            size="xs"
-          />
-          {authorLabel}
-        </span>
-        <p className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
-          {formatRelativeTime(hit.createdAt)}
+        <p className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          {describeSearchHit(hit)}
         </p>
       </div>
-      {authorSecondaryLabel ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {authorSecondaryLabel}
-        </p>
-      ) : null}
-      <p className="mt-2 text-sm leading-6 text-foreground">
-        {truncateContent(hit.content)}
-      </p>
     </div>
   );
 }

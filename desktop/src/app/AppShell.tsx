@@ -1,9 +1,9 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import * as React from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
 
+import { AppHeaderControls } from "@/app/AppHeaderControls";
 import { AppShellProvider } from "@/app/AppShellContext";
 import {
   AppShellOverlays,
@@ -57,13 +57,11 @@ import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { joinChannel } from "@/shared/api/tauri";
 import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
-import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
-import { Button } from "@/shared/ui/button";
 import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/shared/ui/sidebar";
+  hasPrimaryShortcutModifier,
+  isMacPlatform,
+} from "@/shared/lib/platform";
+import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
 
 type AppView =
   | "home"
@@ -369,6 +367,16 @@ export function AppShell() {
     },
     [openSearchHit],
   );
+  const handleOpenSearchUser = React.useCallback(
+    (pubkey: string) => {
+      void openDmMutation
+        .mutateAsync({
+          pubkeys: [pubkey],
+        })
+        .then((directMessage) => goChannel(directMessage.id));
+    },
+    [goChannel, openDmMutation],
+  );
 
   const handleDesktopNotificationAction = React.useEffectEvent(
     async (target: DesktopNotificationTarget) => {
@@ -482,6 +490,14 @@ export function AppShell() {
       }
 
       const key = event.key.toLowerCase();
+      const isSpace =
+        isMacPlatform() && (event.key === " " || event.code === "Space");
+      if (isSpace && !event.shiftKey) {
+        event.preventDefault();
+        handleOpenSearch();
+        return;
+      }
+
       if (key === "k" && !event.shiftKey) {
         event.preventDefault();
         handleOpenSearch();
@@ -598,31 +614,13 @@ export function AppShell() {
                   className="fixed inset-x-0 top-0 z-20 h-10 cursor-default select-none"
                   data-tauri-drag-region
                 />
-                <div className="fixed left-[80px] top-[9px] z-50 flex items-center gap-0.5">
-                  <SidebarTrigger className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
-                  <Button
-                    aria-label="Go back"
-                    className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
-                    data-testid="global-back"
-                    disabled={!canGoBack}
-                    onClick={goBack}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <ChevronLeft className="h-3 w-3" />
-                  </Button>
-                  <Button
-                    aria-label="Go forward"
-                    className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
-                    data-testid="global-forward"
-                    disabled={!canGoForward}
-                    onClick={goForward}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <ChevronRight className="h-3 w-3" />
-                  </Button>
-                </div>
+                <AppHeaderControls
+                  canGoBack={canGoBack}
+                  canGoForward={canGoForward}
+                  onGoBack={goBack}
+                  onGoForward={goForward}
+                  onOpenSearch={handleOpenSearch}
+                />
                 <AppSidebar
                   activeWorkspace={workspacesHook.activeWorkspace}
                   channels={sidebarChannels}
@@ -702,7 +700,6 @@ export function AppShell() {
                     });
                     await goChannel(directMessage.id);
                   }}
-                  onOpenSearch={handleOpenSearch}
                   onSelectAgents={() => {
                     void goAgents();
                   }}
@@ -762,6 +759,7 @@ export function AppShell() {
                     void goHome({ replace: true });
                   }}
                   onOpenSearchResult={handleOpenSearchResult}
+                  onOpenSearchUser={handleOpenSearchUser}
                   onSearchOpenChange={setIsSearchOpen}
                   onSelectChannel={(channelId) => {
                     void goChannel(channelId);

@@ -44,7 +44,7 @@ async function openSearchDialogWithShortcut(
   page: import("@playwright/test").Page,
 ) {
   const searchDialog = page.getByTestId("search-dialog");
-  const openSearchButton = page.getByTestId("open-search");
+  const openSearchButton = page.getByTestId("global-search");
 
   await expect(openSearchButton).toBeVisible();
   await expect
@@ -75,7 +75,7 @@ async function openSearchDialogWithButton(
   page: import("@playwright/test").Page,
 ) {
   const searchDialog = page.getByTestId("search-dialog");
-  const openSearchButton = page.getByTestId("open-search");
+  const openSearchButton = page.getByTestId("global-search");
 
   await expect(openSearchButton).toBeVisible();
   await openSearchButton.click();
@@ -274,6 +274,28 @@ test("opens channel matches from search", async ({ page }) => {
     /#\/channels\/1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9$/,
   );
   await expect(page.getByTestId("chat-title")).toHaveText("engineering");
+});
+
+test("opens people matches from global search", async ({ page }) => {
+  await page.goto("/");
+
+  await openSearchDialogWithButton(page);
+
+  await page.getByTestId("search-input").fill("alice");
+  const results = page.getByTestId("search-results");
+
+  await expect(results).toContainText("People");
+  await expect(results).toContainText("alice");
+  await results
+    .getByTestId(
+      "search-result-user-953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+    )
+    .click();
+
+  await expect(page).toHaveURL(
+    /#\/channels\/f48efb06-0c93-5025-aac9-2e646bb6bfa8$/,
+  );
+  await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
 });
 
 test("search results use your resolved profile label instead of You", async ({

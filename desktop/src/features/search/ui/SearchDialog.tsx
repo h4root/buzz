@@ -3,10 +3,14 @@ import {
   LoaderCircle,
   MessagesSquare,
   Search,
+  X,
   type LucideIcon,
 } from "lucide-react";
 
-import { useUsersBatchQuery } from "@/features/profile/hooks";
+import {
+  useUserSearchQuery,
+  useUsersBatchQuery,
+} from "@/features/profile/hooks";
 import { useSearchMessagesQuery } from "@/features/search/hooks";
 import type { Channel, SearchHit } from "@/shared/api/types";
 import {
@@ -17,6 +21,8 @@ import {
   resultTestId,
   SearchResultShell,
   type SearchResult,
+  UserResultAvatar,
+  UserResultBody,
 } from "@/features/search/ui/SearchResultItem";
 import {
   Dialog,
@@ -76,6 +82,7 @@ type SearchDialogProps = {
   onOpenChange: (open: boolean) => void;
   onOpenChannel: (channelId: string) => void;
   onOpenResult: (hit: SearchHit) => void;
+  onOpenUser: (pubkey: string) => void;
 };
 
 export function SearchDialog({
@@ -85,6 +92,7 @@ export function SearchDialog({
   onOpenChange,
   onOpenChannel,
   onOpenResult,
+  onOpenUser,
 }: SearchDialogProps) {
   const [query, setQuery] = React.useState("");
   const [debouncedQuery, setDebouncedQuery] = React.useState("");
@@ -99,8 +107,19 @@ export function SearchDialog({
     enabled: open,
     limit: 12,
   });
+  const usersQuery = useUserSearchQuery(debouncedQuery, {
+    enabled: open && debouncedQuery.length >= MIN_QUERY_LENGTH,
+    limit: 6,
+  });
 
   const messageResults = searchQuery.data?.hits ?? [];
+  const userResults = React.useMemo(
+    () =>
+      (usersQuery.data ?? []).filter(
+        (user) => user.pubkey.toLowerCase() !== currentPubkey?.toLowerCase(),
+      ),
+    [currentPubkey, usersQuery.data],
+  );
   const channelResults = React.useMemo(() => {
     if (debouncedQuery.length < MIN_QUERY_LENGTH) {
       return [];
@@ -130,18 +149,39 @@ export function SearchDialog({
       })
       .slice(0, 5);
   }, [channels, debouncedQuery]);
+  const sections = React.useMemo(
+    () =>
+      [
+        {
+          count: userResults.length,
+          results: userResults.map((user) => ({
+            kind: "user" as const,
+            user,
+          })),
+          title: "People",
+        },
+        {
+          count: channelResults.length,
+          results: channelResults.map((channel) => ({
+            kind: "channel" as const,
+            channel,
+          })),
+          title: "Channels",
+        },
+        {
+          count: searchQuery.data?.found ?? messageResults.length,
+          results: messageResults.map((hit) => ({
+            kind: "message" as const,
+            hit,
+          })),
+          title: "Messages",
+        },
+      ].filter((section) => section.results.length > 0),
+    [channelResults, messageResults, searchQuery.data?.found, userResults],
+  );
   const results = React.useMemo<SearchResult[]>(
-    () => [
-      ...channelResults.map((channel) => ({
-        kind: "channel" as const,
-        channel,
-      })),
-      ...messageResults.map((hit) => ({
-        kind: "message" as const,
-        hit,
-      })),
-    ],
-    [channelResults, messageResults],
+    () => sections.flatMap((section) => section.results),
+    [sections],
   );
   const resultProfilesQuery = useUsersBatchQuery(
     messageResults.map((hit) => hit.pubkey),
@@ -160,9 +200,14 @@ export function SearchDialog({
         return;
       }
 
+      if (result.kind === "user") {
+        onOpenUser(result.user.pubkey);
+        return;
+      }
+
       onOpenResult(result.hit);
     },
-    [onOpenChange, onOpenChannel, onOpenResult],
+    [onOpenChange, onOpenChannel, onOpenResult, onOpenUser],
   );
 
   React.useEffect(() => {
@@ -204,28 +249,23 @@ export function SearchDialog({
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent
-        className="gap-0 overflow-hidden p-0"
+        className="max-w-3xl translate-y-[-8vh] gap-0 overflow-hidden p-0 [&>button]:hidden"
         data-testid="search-dialog"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           inputRef.current?.focus();
         }}
       >
-        <DialogHeader className="border-b border-border/80 px-6 py-5">
-          <DialogTitle className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
-              <Search className="h-4 w-4" />
-            </span>
-            Search
-          </DialogTitle>
-          <DialogDescription>
-            Full-text search across accessible channels.
+        <DialogHeader className="border-b border-border/80 px-4 py-3">
+          <DialogTitle className="sr-only">Search Sprout</DialogTitle>
+          <DialogDescription className="sr-only">
+            Search people, channels, and message history across Sprout.
           </DialogDescription>
-          <div className="mt-4 flex items-center gap-3 rounded-2xl border border-input bg-card px-3 py-3 shadow-sm">
+          <div className="flex items-center gap-2 rounded-xl border border-input bg-card px-3 py-2.5 shadow-sm">
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
               autoFocus
-              className="h-auto border-0 bg-transparent px-0 py-0 text-base shadow-none focus-visible:ring-0"
+              className="h-auto border-0 bg-transparent px-0 py-0 text-base shadow-none placeholder:text-muted-foreground/60 focus-visible:ring-0"
               data-testid="search-input"
               onChange={(event) => {
                 setQuery(event.target.value);
@@ -255,76 +295,110 @@ export function SearchDialog({
                   openResult(selectedResult);
                 }
               }}
-              placeholder="Search messages, approvals, and forum posts"
+              placeholder="Search Sprout"
               ref={inputRef}
               value={query}
             />
-            <span className="hidden shrink-0 text-xs text-muted-foreground/50 sm:block">
-              &#x2318;K
-            </span>
+            <button
+              aria-label="Close search"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => onOpenChange(false)}
+              type="button"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         </DialogHeader>
 
-        <div className="max-h-[60vh] overflow-y-auto">
+        <div className="max-h-[64vh] overflow-y-auto">
           {debouncedQuery.length < MIN_QUERY_LENGTH ? (
             <SearchState
-              description="Type at least two characters to search the relay-backed history for streams, forums, DMs, approvals, and agent updates."
+              description="Type at least two characters to search people, channels, streams, forums, DMs, approvals, and agent updates."
               icon={MessagesSquare}
-              title="Search message history"
+              title="Search across Sprout"
             />
-          ) : searchQuery.isLoading && results.length === 0 ? (
+          ) : (searchQuery.isLoading || usersQuery.isLoading) &&
+            results.length === 0 ? (
             <SearchLoadingState />
-          ) : searchQuery.error instanceof Error && results.length === 0 ? (
+          ) : (searchQuery.error instanceof Error ||
+              usersQuery.error instanceof Error) &&
+            results.length === 0 ? (
             <SearchState
-              description={searchQuery.error.message}
+              description={
+                searchQuery.error instanceof Error
+                  ? searchQuery.error.message
+                  : usersQuery.error instanceof Error
+                    ? usersQuery.error.message
+                    : "Search failed."
+              }
               icon={LoaderCircle}
               title="Search unavailable"
             />
           ) : results.length === 0 ? (
             <SearchState
-              description="Try a different keyword, channel name, or phrase from the message body."
+              description="Try a different keyword, username, channel name, or phrase from the message body."
               icon={Search}
               title="No matches found"
             />
           ) : (
-            <div className="p-3" data-testid="search-results">
-              <div className="mb-3 flex items-center justify-between px-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                <span>
-                  {channelResults.length +
-                    (searchQuery.data?.found ?? messageResults.length)}{" "}
-                  results
-                </span>
-                <span>Enter to open</span>
-              </div>
+            <div className="p-2.5" data-testid="search-results">
+              <div className="space-y-3">
+                {sections.map((section) => {
+                  let sectionStartIndex = 0;
+                  for (const previousSection of sections) {
+                    if (previousSection === section) {
+                      break;
+                    }
+                    sectionStartIndex += previousSection.results.length;
+                  }
 
-              <div className="space-y-2">
-                {results.map((result, index) => (
-                  <SearchResultShell
-                    icon={resultIcon(result, channelLookup)}
-                    isSelected={index === selectedIndex}
-                    key={resultKey(result)}
-                    onClick={() => openResult(result)}
-                    onMouseEnter={() => setSelectedIndex(index)}
-                    testId={resultTestId(result)}
-                  >
-                    {result.kind === "channel" ? (
-                      <ChannelResultBody channel={result.channel} />
-                    ) : (
-                      <MessageResultBody
-                        currentPubkey={currentPubkey}
-                        hit={result.hit}
-                        resultProfiles={resultProfiles}
-                      />
-                    )}
-                  </SearchResultShell>
-                ))}
+                  return (
+                    <section key={section.title}>
+                      <div className="mb-1.5 flex items-center justify-between px-1.5 text-[11px] font-medium text-muted-foreground">
+                        <span>{section.title}</span>
+                        <span>{section.count}</span>
+                      </div>
+                      <div className="space-y-1">
+                        {section.results.map((result, index) => {
+                          const absoluteIndex = sectionStartIndex + index;
+
+                          return (
+                            <SearchResultShell
+                              icon={resultIcon(result, channelLookup)}
+                              isSelected={absoluteIndex === selectedIndex}
+                              key={resultKey(result)}
+                              leading={
+                                result.kind === "user" ? (
+                                  <UserResultAvatar user={result.user} />
+                                ) : undefined
+                              }
+                              onClick={() => openResult(result)}
+                              onMouseEnter={() =>
+                                setSelectedIndex(absoluteIndex)
+                              }
+                              testId={resultTestId(result)}
+                            >
+                              {result.kind === "channel" ? (
+                                <ChannelResultBody channel={result.channel} />
+                              ) : result.kind === "user" ? (
+                                <UserResultBody user={result.user} />
+                              ) : (
+                                <MessageResultBody
+                                  currentPubkey={currentPubkey}
+                                  hit={result.hit}
+                                  resultProfiles={resultProfiles}
+                                />
+                              )}
+                            </SearchResultShell>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
               </div>
             </div>
           )}
-        </div>
-
-        <div className="border-t border-border/80 bg-card/50 px-6 py-3 text-xs text-muted-foreground">
-          Search is relay-backed and scoped to channels you can access.
         </div>
       </DialogContent>
     </Dialog>

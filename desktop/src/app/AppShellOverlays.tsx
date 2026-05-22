@@ -31,6 +31,7 @@ type AppShellOverlaysProps = {
   onChannelManagementOpenChange: (open: boolean) => void;
   onDeleteActiveChannel: () => void;
   onOpenSearchResult: (hit: SearchHit) => void;
+  onOpenSearchUser: (pubkey: string) => void;
   onSearchOpenChange: (open: boolean) => void;
   onSelectChannel: (channelId: string) => void;
 };
@@ -47,6 +48,7 @@ export function AppShellOverlays({
   onChannelManagementOpenChange,
   onDeleteActiveChannel,
   onOpenSearchResult,
+  onOpenSearchUser,
   onSearchOpenChange,
   onSelectChannel,
 }: AppShellOverlaysProps) {
@@ -72,6 +74,7 @@ export function AppShellOverlays({
             currentPubkey={currentPubkey}
             onOpenChannel={onSelectChannel}
             onOpenResult={onOpenSearchResult}
+            onOpenUser={onOpenSearchUser}
             onOpenChange={onSearchOpenChange}
             open={true}
           />
