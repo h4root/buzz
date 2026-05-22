@@ -180,7 +180,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
   const composerWrapperRef = React.useRef<HTMLDivElement>(null);
   useComposerHeightPadding(timelineScrollRef, composerWrapperRef);
-  const { isOpen: isTerminalOpen, close: closeTerminal } = useTerminal();
+  const { isOpen: isTerminalOpen } = useTerminal();
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -439,13 +439,10 @@ export const ChannelPane = React.memo(function ChannelPane({
                 </div>
               </div>
               {activeChannel && isTerminalOpen ? (
-                <div className="p-4 pt-2">
-                  <TerminalPanel
-                    channelId={activeChannel.id}
-                    isOpen={isTerminalOpen}
-                    onClose={closeTerminal}
-                  />
-                </div>
+                <TerminalPanel
+                  channelId={activeChannel.id}
+                  isOpen={isTerminalOpen}
+                />
               ) : null}
             </div>
           </div>
