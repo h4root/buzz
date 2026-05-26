@@ -11,6 +11,8 @@
 
 /// API token storage and lookup.
 pub mod api_token;
+/// Relay-scoped archived identity persistence (NIP-IA).
+pub mod archived_identities;
 /// Channel and membership persistence.
 pub mod channel;
 /// Direct message channel persistence.
@@ -72,7 +74,7 @@ pub async fn insert_mentions(
     }
 
     let event_id_bytes = event.id.as_bytes();
-    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at_secs = event.created_at.as_secs() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
     let kind = event.kind.as_u16() as u32;
@@ -100,7 +102,7 @@ pub async fn insert_mentions(
     }
 
     // Single multi-row INSERT ... ON CONFLICT DO NOTHING — one round-trip regardless of mention count.
-    let mut qb: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "INSERT INTO event_mentions \
          (pubkey_hex, event_id, event_created_at, channel_id, event_kind) ",
     );
@@ -1416,6 +1418,45 @@ impl Db {
         relay_members::backfill_from_allowlist(&self.pool).await
     }
 
+    // ── Archived identities (NIP-IA) ──────────────────────────────────────────
+
+    /// Returns `true` if `pubkey` (64-char hex) is currently archived.
+    pub async fn is_archived(&self, pubkey: &str) -> Result<bool> {
+        archived_identities::is_archived(&self.pool, pubkey).await
+    }
+
+    /// Archives an identity. Returns `true` if inserted, `false` if already archived.
+    pub async fn archive(
+        &self,
+        pubkey: &str,
+        consent_path: &str,
+        actor: &str,
+        reason: Option<&str>,
+        replaced_by: Option<&str>,
+        request_event_id: &str,
+    ) -> Result<bool> {
+        archived_identities::archive(
+            &self.pool,
+            pubkey,
+            consent_path,
+            actor,
+            reason,
+            replaced_by,
+            request_event_id,
+        )
+        .await
+    }
+
+    /// Unarchives an identity. Returns `true` if deleted, `false` if absent.
+    pub async fn unarchive(&self, pubkey: &str) -> Result<bool> {
+        archived_identities::unarchive(&self.pool, pubkey).await
+    }
+
+    /// Returns all archived identities ordered by archive time ascending.
+    pub async fn list_archived(&self) -> Result<Vec<archived_identities::ArchivedIdentity>> {
+        archived_identities::list_archived(&self.pool).await
+    }
+
     // ── Discovery events ─────────────────────────────────────────────────────
 
     /// Soft-delete NIP-29 discovery events for a channel created by a specific relay pubkey.
@@ -1451,7 +1492,7 @@ impl Db {
     ) -> Result<(StoredEvent, bool)> {
         let kind_i32 = sprout_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
-        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at_secs = event.created_at.as_secs() as i64;
         let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
             .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
 
@@ -1605,7 +1646,7 @@ impl Db {
     ) -> Result<(StoredEvent, bool)> {
         let kind_i32 = sprout_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
-        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at_secs = event.created_at.as_secs() as i64;
         let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
             .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
 

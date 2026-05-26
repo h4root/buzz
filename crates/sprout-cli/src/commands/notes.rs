@@ -7,9 +7,10 @@
 //! - `notes set --name <s> --title T [--summary S] [--tag t]... --content -`
 //!   Idempotent upsert. Read-before-write preserves `published_at` and carries
 //!   forward the existing title when `--title` is omitted on an update.
-//! - `notes get (--naddr <n> | --name <slug> [--author <ref>]) [--content-only]`
+//! - `notes get (--naddr <n> | --name <slug> [--author <ref>] [--latest]) [--content-only]`
 //!   `--naddr` / coordinate form is exact. `--name` does a cross-author `#d`
-//!   query; >1 hit prints candidates and exits 1.
+//!   query; >1 hit prints candidates and exits 1, unless `--latest` picks the
+//!   most recently updated one. `--latest` conflicts with `--author`/`--naddr`.
 //! - `notes ls [--author <ref>] [--tag t] [--limit N]` — own notes by default.
 //! - `notes rm --name <s>` — NIP-09 deletion (kind:5) targeting the addressable
 //!   coordinate via an `a` tag only (no `e` tag — see [`build_rm_event`]).
@@ -149,7 +150,7 @@ impl NoteSnapshot {
             summary,
             tags,
             published_at,
-            updated_at: event.created_at.as_u64(),
+            updated_at: event.created_at.as_secs(),
             content: event.content.clone(),
         })
     }
@@ -487,20 +488,19 @@ pub fn build_set_event(
     let published_at: u64 = prior.and_then(|p| p.published_at).unwrap_or(now);
 
     let mut evt_tags: Vec<Tag> = Vec::with_capacity(4 + topic_tags.len());
-    evt_tags.push(Tag::parse(&["d", slug]).map_err(tag_err)?);
-    evt_tags.push(Tag::parse(&["title", title_value]).map_err(tag_err)?);
+    evt_tags.push(Tag::parse(["d", slug]).map_err(tag_err)?);
+    evt_tags.push(Tag::parse(["title", title_value]).map_err(tag_err)?);
     if let Some(s) = summary_value {
-        evt_tags.push(Tag::parse(&["summary", s]).map_err(tag_err)?);
+        evt_tags.push(Tag::parse(["summary", s]).map_err(tag_err)?);
     }
     for t in &topic_tags {
-        evt_tags.push(Tag::parse(&["t", t]).map_err(tag_err)?);
+        evt_tags.push(Tag::parse(["t", t.as_str()]).map_err(tag_err)?);
     }
-    evt_tags.push(Tag::parse(&["published_at", &published_at.to_string()]).map_err(tag_err)?);
+    evt_tags.push(Tag::parse(["published_at", &published_at.to_string()]).map_err(tag_err)?);
 
-    Ok(
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content, evt_tags)
-            .custom_created_at(Timestamp::from(now)),
-    )
+    Ok(EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content)
+        .tags(evt_tags)
+        .custom_created_at(Timestamp::from(now)))
 }
 
 fn tag_err(e: impl std::fmt::Display) -> CliError {
@@ -620,11 +620,40 @@ pub async fn cmd_set(
     Ok(())
 }
 
+/// Validate the flag combination for `notes get`. Pure (booleans only) so the
+/// full matrix is unit-testable without a relay. `--naddr` and `--name` are
+/// exclusive-or; `--author` and `--latest` only refine `--name`, and they
+/// disambiguate the same multi-author case in opposite ways, so they conflict.
+fn validate_get_args(naddr: bool, name: bool, author: bool, latest: bool) -> Result<(), CliError> {
+    if naddr == name {
+        return Err(CliError::Usage(
+            "exactly one of --naddr or --name is required".into(),
+        ));
+    }
+    if naddr && author {
+        return Err(CliError::Usage(
+            "--author only applies with --name; --naddr already identifies the author".into(),
+        ));
+    }
+    if naddr && latest {
+        return Err(CliError::Usage(
+            "--latest only applies with --name; --naddr already identifies one note".into(),
+        ));
+    }
+    if author && latest {
+        return Err(CliError::Usage(
+            "--latest and --author are mutually exclusive".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn cmd_get(
     client: &SproutClient,
     naddr: Option<&str>,
     name: Option<&str>,
     author: Option<&str>,
+    latest: bool,
     content_only: bool,
 ) -> Result<(), CliError> {
     let snapshot = if let Some(raw) = naddr {
@@ -654,10 +683,14 @@ pub async fn cmd_get(
                 1 => snapshots.remove(0),
                 _ => {
                     sort_snapshots_newest_first(&mut snapshots);
-                    return Err(CliError::Usage(format!(
-                        "note name {slug:?} is ambiguous; pass --author <pubkey>\n{}",
-                        format_note_candidates(&snapshots)
-                    )));
+                    if latest {
+                        snapshots.remove(0)
+                    } else {
+                        return Err(CliError::Usage(format!(
+                            "note name {slug:?} is ambiguous; pass --author <pubkey> or --latest\n{}",
+                            format_note_candidates(&snapshots)
+                        )));
+                    }
                 }
             }
         }
@@ -716,8 +749,8 @@ pub async fn cmd_ls(
 /// would route to the per-event path and leave the live replaceable row
 /// intact — the note would survive the "deletion". Pure and unit-testable.
 pub fn build_rm_event(coord: &nostr::nips::nip01::Coordinate) -> Result<EventBuilder, CliError> {
-    let a_tag = Tag::parse(&["a", &coord.to_string()]).map_err(tag_err)?;
-    Ok(EventBuilder::new(Kind::EventDeletion, "", vec![a_tag]))
+    let a_tag = Tag::parse(["a", &coord.to_string()]).map_err(tag_err)?;
+    Ok(EventBuilder::new(Kind::EventDeletion, "").tags(vec![a_tag]))
 }
 
 pub async fn cmd_rm(client: &SproutClient, slug: &str) -> Result<(), CliError> {
@@ -800,24 +833,16 @@ pub async fn dispatch(cmd: crate::NotesCmd, client: &SproutClient) -> Result<(),
             naddr,
             name,
             author,
+            latest,
             content_only,
         } => {
-            if naddr.is_some() == name.is_some() {
-                return Err(CliError::Usage(
-                    "exactly one of --naddr or --name is required".into(),
-                ));
-            }
-            if naddr.is_some() && author.is_some() {
-                return Err(CliError::Usage(
-                    "--author only applies with --name; --naddr already identifies the author"
-                        .into(),
-                ));
-            }
+            validate_get_args(naddr.is_some(), name.is_some(), author.is_some(), latest)?;
             cmd_get(
                 client,
                 naddr.as_deref(),
                 name.as_deref(),
                 author.as_deref(),
+                latest,
                 content_only,
             )
             .await
@@ -897,11 +922,12 @@ mod tests {
         content: &str,
     ) -> Event {
         let mut tags = vec![
-            Tag::parse(&["d", slug]).unwrap(),
-            Tag::parse(&["title", title]).unwrap(),
+            Tag::parse(["d", slug]).unwrap(),
+            Tag::parse(["title", title]).unwrap(),
         ];
         tags.extend(extra);
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content, tags)
+        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content)
+            .tags(tags)
             .custom_created_at(Timestamp::from(ts))
             .sign_with_keys(keys)
             .unwrap()
@@ -916,10 +942,10 @@ mod tests {
             "my-slug",
             "My Title",
             vec![
-                Tag::parse(&["summary", "a short summary"]).unwrap(),
-                Tag::parse(&["t", "rust"]).unwrap(),
-                Tag::parse(&["t", "cli"]).unwrap(),
-                Tag::parse(&["published_at", "1700000000"]).unwrap(),
+                Tag::parse(["summary", "a short summary"]).unwrap(),
+                Tag::parse(["t", "rust"]).unwrap(),
+                Tag::parse(["t", "cli"]).unwrap(),
+                Tag::parse(["published_at", "1700000000"]).unwrap(),
             ],
             "# body",
         );
@@ -940,13 +966,10 @@ mod tests {
         let keys = Keys::generate();
         // Synthesize an event without a `d` tag — has to be done with EventBuilder
         // directly since `build_30023` always inserts one.
-        let event = EventBuilder::new(
-            Kind::Custom(KIND_LONG_FORM),
-            "body",
-            vec![Tag::parse(&["title", "no-d"]).unwrap()],
-        )
-        .sign_with_keys(&keys)
-        .unwrap();
+        let event = EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "body")
+            .tags(vec![Tag::parse(["title", "no-d"]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
         let err = NoteSnapshot::from_event(&event).unwrap_err();
         assert!(matches!(err, CliError::Other(m) if m.contains("missing the required `d` tag")));
     }
@@ -954,13 +977,10 @@ mod tests {
     #[test]
     fn note_snapshot_rejects_wrong_kind() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(
-            Kind::TextNote,
-            "hi",
-            vec![Tag::parse(&["d", "ignored"]).unwrap()],
-        )
-        .sign_with_keys(&keys)
-        .unwrap();
+        let event = EventBuilder::new(Kind::TextNote, "hi")
+            .tags(vec![Tag::parse(["d", "ignored"]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
         let err = NoteSnapshot::from_event(&event).unwrap_err();
         assert!(matches!(err, CliError::Other(m) if m.contains("expected kind:30023")));
     }
@@ -976,7 +996,7 @@ mod tests {
             1_000,
             "x",
             "T",
-            vec![Tag::parse(&["published_at", "not-a-number"]).unwrap()],
+            vec![Tag::parse(["published_at", "not-a-number"]).unwrap()],
             "",
         );
         let snap = NoteSnapshot::from_event(&event).unwrap();
@@ -1061,13 +1081,13 @@ mod tests {
         let keys = Keys::generate();
         let mut extra: Vec<Tag> = Vec::new();
         if let Some(s) = summary {
-            extra.push(Tag::parse(&["summary", s]).unwrap());
+            extra.push(Tag::parse(["summary", s]).unwrap());
         }
         for t in tags {
-            extra.push(Tag::parse(&["t", t]).unwrap());
+            extra.push(Tag::parse(["t", t]).unwrap());
         }
         if let Some(p) = published_at {
-            extra.push(Tag::parse(&["published_at", &p.to_string()]).unwrap());
+            extra.push(Tag::parse(["published_at", &p.to_string()]).unwrap());
         }
         NoteSnapshot::from_event(&build_30023(&keys, ts, slug, title, extra, content)).unwrap()
     }
@@ -1086,7 +1106,7 @@ mod tests {
         assert_eq!(tag_value(&event, "title"), Some("Hello"));
         assert_eq!(tag_value(&event, "d"), Some("x"));
         assert_eq!(tag_value(&event, "published_at"), Some("1700000000"));
-        assert_eq!(event.created_at.as_u64(), 1_700_000_000);
+        assert_eq!(event.created_at.as_secs(), 1_700_000_000);
         // No `summary` tag should be present when none was specified.
         assert!(tag_value(&event, "summary").is_none());
         assert!(t_tags(&event).is_empty());
@@ -1116,7 +1136,7 @@ mod tests {
         .unwrap();
         assert_eq!(tag_value(&event, "title"), Some("Original Title"));
         assert_eq!(tag_value(&event, "published_at"), Some("1650000000"));
-        assert_eq!(event.created_at.as_u64(), 1_700_001_000);
+        assert_eq!(event.created_at.as_secs(), 1_700_001_000);
         assert_eq!(event.content, "new body");
     }
 
@@ -1305,5 +1325,45 @@ mod tests {
         let prior = prior_snapshot(1_000, "x", "T", None, &[], None, "");
         let event = build_and_sign(Some(&prior), "x", None, None, None, "body", 2_000).unwrap();
         assert_eq!(tag_value(&event, "published_at"), Some("2000"));
+    }
+
+    // -- validate_get_args --
+
+    #[test]
+    fn validate_get_args_accepts_minimal_forms() {
+        // (naddr, name, author, latest)
+        assert!(validate_get_args(true, false, false, false).is_ok()); // --naddr
+        assert!(validate_get_args(false, true, false, false).is_ok()); // --name
+        assert!(validate_get_args(false, true, true, false).is_ok()); // --name --author
+        assert!(validate_get_args(false, true, false, true).is_ok()); // --name --latest
+    }
+
+    #[test]
+    fn validate_get_args_requires_exactly_one_selector() {
+        let neither = validate_get_args(false, false, false, false);
+        let both = validate_get_args(true, true, false, false);
+        for err in [neither, both] {
+            assert!(matches!(err, Err(CliError::Usage(m)) if m.contains("exactly one")));
+        }
+    }
+
+    #[test]
+    fn validate_get_args_rejects_naddr_with_refiners() {
+        assert!(matches!(
+            validate_get_args(true, false, true, false),
+            Err(CliError::Usage(m)) if m.contains("--author only applies with --name")
+        ));
+        assert!(matches!(
+            validate_get_args(true, false, false, true),
+            Err(CliError::Usage(m)) if m.contains("--latest only applies with --name")
+        ));
+    }
+
+    #[test]
+    fn validate_get_args_rejects_author_and_latest_together() {
+        assert!(matches!(
+            validate_get_args(false, true, true, true),
+            Err(CliError::Usage(m)) if m.contains("mutually exclusive")
+        ));
     }
 }

@@ -378,6 +378,24 @@ pub enum ChannelsCmd {
         #[arg(long)]
         channel: String,
     },
+    /// Search channels by human-readable name
+    #[command(
+        after_help = "Examples:\n  sprout channels search --query composer\n  sprout channels search --query sprout-chat-composer --exact\n  sprout channels search --query design --include-archived"
+    )]
+    Search {
+        /// Search query (case-insensitive substring of channel name)
+        #[arg(long)]
+        query: String,
+        /// Require an exact case-insensitive match instead of substring
+        #[arg(long, default_value_t = false)]
+        exact: bool,
+        /// Include archived channels in results
+        #[arg(long, default_value_t = false)]
+        include_archived: bool,
+        /// Maximum number of channel-metadata events to fetch from the relay
+        #[arg(long, default_value_t = 1000)]
+        limit: u32,
+    },
     /// Create a new channel
     #[command(
         after_help = "Examples:\n  sprout channels create --name general --type stream --visibility open\n  sprout channels create --name design --type forum --visibility open --description \"Design discussions\""
@@ -840,6 +858,10 @@ pub enum NotesCmd {
         /// Disambiguate `--name` to a specific author (hex pubkey, display name, or `me`).
         #[arg(long)]
         author: Option<String>,
+        /// On an ambiguous `--name` (multiple authors), pick the most recently updated note
+        /// instead of erroring. Mutually exclusive with `--author` and `--naddr`.
+        #[arg(long, default_value_t = false)]
+        latest: bool,
         /// Print only the markdown body, not the full event JSON.
         #[arg(long, default_value_t = false)]
         content_only: bool,
@@ -942,6 +964,9 @@ pub enum MemCmd {
         /// Owner pubkey (hex). Overrides SPROUT_AUTH_TAG.
         #[arg(long)]
         owner: Option<String>,
+        /// Agent pubkey (hex) to read as this key's owner.
+        #[arg(long)]
+        agent: Option<String>,
         /// Emit JSON instead of tab-delimited lines.
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -951,12 +976,18 @@ pub enum MemCmd {
         slug: String,
         #[arg(long)]
         owner: Option<String>,
+        /// Agent pubkey (hex) to read as this key's owner.
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Print sha256(value) in hex (use as `--base-hash` for `mem patch`).
     Hash {
         slug: String,
         #[arg(long)]
         owner: Option<String>,
+        /// Agent pubkey (hex) to read as this key's owner.
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Set a slug's value. Pass `-` to read the value from stdin.
     Set {
