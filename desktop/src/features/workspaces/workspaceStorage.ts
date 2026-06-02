@@ -67,6 +67,13 @@ export function saveActiveWorkspaceId(id: string): void {
   localStorage.setItem(ACTIVE_WORKSPACE_KEY, id);
 }
 
+/** Whether the currently-active workspace is in serverless mode. */
+export function isActiveWorkspaceServerless(): boolean {
+  const id = loadActiveWorkspaceId();
+  const active = loadWorkspaces().find((w) => w.id === id);
+  return isServerlessWorkspace(active);
+}
+
 export function normalizeRelayUrl(url: string): string {
   if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
     return `wss://${url}`;

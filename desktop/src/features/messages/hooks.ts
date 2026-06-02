@@ -21,6 +21,21 @@ import {
   sendChannelMessage,
 } from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
+
+import { isActiveWorkspaceServerless } from "@/features/workspaces/workspaceStorage";
+
+/**
+ * Encrypted channels in serverless mode: DMs and private channels are made
+ * private by NIP-17 gift-wrap encryption (no server to enforce access). On a
+ * Sprout-server workspace, privacy is server-enforced and messages stay
+ * plaintext, so this is always false.
+ */
+function isEncryptedChannel(channel: Channel | null): boolean {
+  if (!channel || !isActiveWorkspaceServerless()) {
+    return false;
+  }
+  return channel.channelType === "dm" || channel.visibility === "private";
+}
 // Same .mjs the renderer uses, so the cache-update projection can't drift
 // from the on-render overlay.
 import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay.mjs";
@@ -134,6 +149,7 @@ export function useChannelMessagesQuery(channel: Channel | null) {
       const history = await relayClient.fetchChannelHistory(
         channel.id,
         CHANNEL_HISTORY_LIMIT,
+        isEncryptedChannel(channel),
       );
       const currentMessages =
         queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
@@ -153,6 +169,7 @@ export function useChannelSubscription(channel: Channel | null) {
   const queryClient = useQueryClient();
   const channelId = channel?.id ?? null;
   const channelType = channel?.channelType ?? null;
+  const encrypted = isEncryptedChannel(channel);
   const syncLatestHistory = useEffectEvent(async () => {
     if (!channelId) {
       return;
@@ -161,6 +178,7 @@ export function useChannelSubscription(channel: Channel | null) {
     const history = await relayClient.fetchChannelHistory(
       channelId,
       CHANNEL_HISTORY_LIMIT,
+      encrypted,
     );
 
     queryClient.setQueryData<RelayEvent[]>(
@@ -228,11 +246,15 @@ export function useChannelSubscription(channel: Channel | null) {
     });
 
     relayClient
-      .subscribeToChannel(channelId, (event) => {
-        if (!isDisposed) {
-          appendMessage(event);
-        }
-      })
+      .subscribeToChannel(
+        channelId,
+        (event) => {
+          if (!isDisposed) {
+            appendMessage(event);
+          }
+        },
+        encrypted,
+      )
       .then((dispose) => {
         if (isDisposed) {
           void dispose();
@@ -262,7 +284,7 @@ export function useChannelSubscription(channel: Channel | null) {
         void cleanup();
       }
     };
-  }, [channelId, channelType]);
+  }, [channelId, channelType, encrypted]);
 }
 
 export function useSendMessageMutation(

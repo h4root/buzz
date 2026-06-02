@@ -748,6 +748,40 @@ export async function sendChannelMessage(
   };
 }
 
+type RawDecryptedEvent = {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+  channel_id: string | null;
+};
+
+/**
+ * Decrypt a NIP-17 gift wrap (kind 1059) addressed to us, returning the inner
+ * message rumor shaped as a RelayEvent. Used for serverless encrypted channels
+ * and DMs. Throws if the wrap isn't addressed to us or can't be decrypted.
+ */
+export async function decryptGiftWrap(
+  eventJson: string,
+): Promise<RelayEvent & { channelId: string | null }> {
+  const r = await invokeTauri<RawDecryptedEvent>("decrypt_gift_wrap", {
+    eventJson,
+  });
+  return {
+    id: r.id,
+    pubkey: r.pubkey,
+    created_at: r.created_at,
+    kind: r.kind,
+    tags: r.tags,
+    content: r.content,
+    sig: r.sig,
+    channelId: r.channel_id,
+  };
+}
+
 export type BlobDescriptor = {
   url: string;
   sha256: string;

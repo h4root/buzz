@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 import {
   createAuthEvent,
+  decryptGiftWrap,
   getRelayWsUrl,
   signRelayEvent,
 } from "@/shared/api/tauri";
@@ -41,9 +42,14 @@ const RECONNECT_BASE_DELAY_MS = 1_000,
 const STALL_CHECK_INTERVAL_MS = 10_000;
 const STALL_IDLE_TIMEOUT_MS = 60_000;
 
+/** NIP-59 gift wrap kind — encrypted message envelope on the relay. */
+const GIFT_WRAP_KIND = 1059;
+
 export class RelayClient {
   private wsId: number | null = null;
   private relayUrl: string | null = null;
+  /** Our identity pubkey (hex), cached for encrypted gift-wrap filters. */
+  private cachedPubkey: string | null = null;
   private connectPromise: Promise<void> | null = null;
   private reconnectTimeout: number | null = null;
   private reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
@@ -111,6 +117,7 @@ export class RelayClient {
     this.connectionGeneration++;
     this.keepAliveRequested = false;
     this.relayUrl = null;
+    this.cachedPubkey = null;
     this.hasConnectedOnce = false;
     this.notifyReconnectListeners = false;
     this.terminal = false;
@@ -156,8 +163,45 @@ export class RelayClient {
     this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
   }
 
-  async fetchChannelHistory(channelId: string, limit = 50) {
+  async fetchChannelHistory(channelId: string, limit = 50, encrypted = false) {
+    if (encrypted) {
+      return this.fetchEncryptedHistory(channelId, limit);
+    }
     return this.fetchHistory(this.buildChannelFilter(channelId, limit));
+  }
+
+  /**
+   * Encrypted (serverless private/DM) channel history. The relay stores only
+   * NIP-17 gift wraps (kind 1059) addressed to us by `#p`; it has no `#h` index
+   * for them. So we fetch all our gift wraps, decrypt each in the Rust backend,
+   * and keep the inner kind-9 rumors whose `h` tag matches this channel.
+   */
+  private async fetchEncryptedHistory(channelId: string, limit: number) {
+    const wraps = await this.fetchHistory({
+      kinds: [GIFT_WRAP_KIND],
+      "#p": [await this.myPubkey()],
+      limit: Math.max(limit * 4, 200),
+    });
+    const out: RelayEvent[] = [];
+    for (const wrap of wraps) {
+      try {
+        const inner = await decryptGiftWrap(JSON.stringify(wrap));
+        if (inner.channelId === channelId) {
+          out.push(inner);
+        }
+      } catch {
+        // Not addressed to us / undecryptable — skip.
+      }
+    }
+    return out;
+  }
+
+  private async myPubkey(): Promise<string> {
+    if (!this.cachedPubkey) {
+      const { getIdentity } = await import("@/shared/api/tauri");
+      this.cachedPubkey = (await getIdentity()).pubkey;
+    }
+    return this.cachedPubkey;
   }
 
   async fetchChannelHistoryBefore(
@@ -274,7 +318,27 @@ export class RelayClient {
   async subscribeToChannel(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
+    encrypted = false,
   ) {
+    if (encrypted) {
+      // Subscribe to our gift wraps; decrypt each and dispatch only those whose
+      // inner rumor belongs to this channel.
+      return this.subscribe(
+        { kinds: [GIFT_WRAP_KIND], "#p": [await this.myPubkey()], limit: 50 },
+        (wrap) => {
+          void (async () => {
+            try {
+              const inner = await decryptGiftWrap(JSON.stringify(wrap));
+              if (inner.channelId === channelId) {
+                onEvent(inner);
+              }
+            } catch {
+              // Not ours / undecryptable — skip.
+            }
+          })();
+        },
+      );
+    }
     return this.subscribe(this.buildChannelFilter(channelId, 50), onEvent);
   }
 

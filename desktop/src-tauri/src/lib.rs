@@ -1,5 +1,6 @@
 mod app_state;
 mod commands;
+mod encrypted;
 mod events;
 mod huddle;
 mod managed_agents;
@@ -550,6 +551,7 @@ pub fn run() {
             get_feed,
             search_messages,
             send_channel_message,
+            decrypt_gift_wrap,
             get_forum_posts,
             get_forum_thread,
             edit_message,

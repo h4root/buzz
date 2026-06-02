@@ -1,5 +1,6 @@
 use nostr::EventId;
 use tauri::State;
+use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
@@ -12,6 +13,120 @@ use crate::{
     nostr_convert,
     relay::{query_relay, submit_event},
 };
+
+// ── Encrypted channel routing (serverless private channels + DMs) ────────────
+//
+// In serverless mode a "private" channel or DM is made private by encryption,
+// not server access control. When a channel is encrypted, outbound messages
+// are NIP-17 gift-wrapped to every member (see crate::encrypted) instead of
+// published as plaintext kind:9 events.
+
+/// Whether the given channel must be encrypted: serverless mode AND the channel
+/// is a DM or has `private` visibility. Returns the member pubkeys (hex) to
+/// encrypt to (always including the sender) when encrypted, else `None`.
+async fn encrypted_recipients(
+    state: &AppState,
+    channel_id: &str,
+) -> Result<Option<Vec<String>>, String> {
+    if !state.is_serverless() {
+        return Ok(None);
+    }
+
+    let meta = query_relay(
+        state,
+        &[serde_json::json!({"kinds":[39000],"#d":[channel_id],"limit":1})],
+    )
+    .await?;
+    let Some(meta) = meta.first() else {
+        return Ok(None);
+    };
+    let info = nostr_convert::channel_info_from_event(meta, None, None)?;
+    let encrypted = info.channel_type == "dm" || info.visibility == "private";
+    if !encrypted {
+        return Ok(None);
+    }
+
+    // Members come from the kind:39002 list; always include ourselves so we can
+    // read back our own sent messages.
+    let member_events = query_relay(
+        state,
+        &[serde_json::json!({"kinds":[39002],"#d":[channel_id],"limit":1})],
+    )
+    .await?;
+    let mut members: Vec<String> = member_events
+        .first()
+        .map(|ev| {
+            ev.tags
+                .iter()
+                .filter_map(|t| {
+                    let s = t.as_slice();
+                    if s.len() >= 2 && s[0] == "p" {
+                        Some(s[1].to_ascii_lowercase())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let me = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        keys.public_key().to_hex()
+    };
+    if !members.contains(&me) {
+        members.push(me);
+    }
+    members.sort();
+    members.dedup();
+    Ok(Some(members))
+}
+
+/// Build a kind:9 message rumor, gift-wrap it to every member, and publish all
+/// wraps. Returns the inner rumor's event id (stable across recipients) so the
+/// UI can reference the logical message.
+async fn send_encrypted_message(
+    state: &AppState,
+    channel_id: Uuid,
+    content: &str,
+    mention_refs: &[&str],
+    media: &[Vec<String>],
+    members_hex: &[String],
+) -> Result<String, String> {
+    let keys = {
+        let guard = state.keys.lock().map_err(|e| e.to_string())?;
+        guard.clone()
+    };
+
+    // The rumor is a normal kind:9 channel message (with the `h` tag), so once
+    // unwrapped it renders through the standard message pipeline.
+    let builder = events::build_message(channel_id, content, None, mention_refs, media)?;
+    let rumor = builder.build(keys.public_key());
+    let rumor_id = rumor.id.map(|id| id.to_hex()).unwrap_or_default();
+
+    let mut recipients = Vec::with_capacity(members_hex.len());
+    for hex in members_hex {
+        let pk = nostr::PublicKey::from_hex(hex)
+            .map_err(|e| format!("invalid member pubkey {hex}: {e}"))?;
+        recipients.push(pk);
+    }
+
+    let wraps = crate::encrypted::build_gift_wraps(&keys, rumor, &recipients).await?;
+
+    let relay_urls = crate::relay::relay_ws_urls_with_override(state);
+    let mut published = 0;
+    let mut last_err = None;
+    for wrap in &wraps {
+        match crate::ws_relay::publish_signed_event_ws(wrap, &keys, &relay_urls).await {
+            Ok(()) => published += 1,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    if published == 0 {
+        return Err(last_err.unwrap_or_else(|| "failed to publish any gift wrap".to_string()));
+    }
+    Ok(rumor_id)
+}
 
 // ── Reads (pure-nostr) ──────────────────────────────────────────────────────
 
@@ -280,6 +395,30 @@ pub async fn send_channel_message(
     let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
     let media = media_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
+
+    // Encrypted serverless channels (DM / private): gift-wrap to all members.
+    // Only plain messages (kind 9) are encrypted; forum posts/comments fall
+    // through to the plaintext path (private forums aren't a serverless model).
+    if kind_num == sprout_core::kind::KIND_STREAM_MESSAGE && parent_event_id.is_none() {
+        if let Some(members) = encrypted_recipients(&state, &channel_id).await? {
+            let rumor_id = send_encrypted_message(
+                &state,
+                channel_uuid,
+                content.trim(),
+                &mention_refs,
+                &media,
+                &members,
+            )
+            .await?;
+            return Ok(SendChannelMessageResponse {
+                event_id: rumor_id,
+                root_event_id: None,
+                parent_event_id: None,
+                depth: 0,
+                created_at: chrono::Utc::now().timestamp(),
+            });
+        }
+    }
 
     let mut resolved_root: Option<String> = None;
 
