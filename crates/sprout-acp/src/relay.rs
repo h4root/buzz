@@ -656,24 +656,12 @@ impl RelayEventPublisher {
 impl HarnessRelay {
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Connect to relay and authenticate via NIP-42.
+    /// Connect to the relay, optionally in serverless mode (generic relay, AUTH
+    /// optional, plain-WS reads/writes). In server mode (`serverless = false`)
+    /// the NIP-42 AUTH handshake is performed; in serverless mode it is skipped.
     ///
     /// `auth_tag` is an optional NIP-OA owner attestation included in the AUTH
     /// event for relay membership delegation.
-    /// Server-mode convenience wrapper around [`HarnessRelay::connect_with_mode`].
-    /// Kept as part of the public API; the binary uses `connect_with_mode`.
-    #[allow(dead_code)]
-    pub async fn connect(
-        relay_url: &str,
-        keys: &Keys,
-        agent_pubkey_hex: &str,
-        auth_tag: Option<nostr::Tag>,
-    ) -> Result<Self, RelayError> {
-        Self::connect_with_mode(relay_url, keys, agent_pubkey_hex, auth_tag, false).await
-    }
-
-    /// Connect, optionally in serverless mode (generic relay, AUTH optional,
-    /// plain-WS reads/writes). See [`HarnessRelay::connect`].
     pub async fn connect_with_mode(
         relay_url: &str,
         keys: &Keys,
@@ -1133,9 +1121,9 @@ struct BgState {
 }
 
 impl BgState {
-    /// Server-mode constructor. Used by unit tests; the runtime path uses
+    /// Server-mode constructor. Test-only; the runtime path uses
     /// [`BgState::with_serverless`].
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn new() -> Self {
         Self::with_serverless(false)
     }
