@@ -87,7 +87,22 @@ export function AddWorkspaceDialog({
             <input
               checked={serverless}
               className="mt-0.5 h-4 w-4 accent-primary"
-              onChange={(e) => setServerless(e.target.checked)}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setServerless(on);
+                // Turning serverless ON pre-fills the recommended relays so the
+                // user doesn't have to tap every chip. Only auto-fill when the
+                // field is empty or still holds the defaults, so we never stomp
+                // a custom relay list the user typed. Turning it OFF clears the
+                // default list (a single Sprout relay is expected instead).
+                if (on) {
+                  if (relayUrl.trim() === "") {
+                    setRelayUrl(DEFAULT_SERVERLESS_RELAY);
+                  }
+                } else if (relayUrl.trim() === DEFAULT_SERVERLESS_RELAY) {
+                  setRelayUrl("");
+                }
+              }}
               type="checkbox"
             />
             <span className="flex flex-col gap-0.5">

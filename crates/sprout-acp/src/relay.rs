@@ -436,31 +436,81 @@ impl RestClient {
         // Fan out to every relay; succeed if ANY accepts. This makes the
         // agent's replies resilient to a single relay rate-limiting ("noting
         // too much") or being down — exactly what the desktop relay pool does.
+        //
+        // Rate-limits are transient: if a full fan-out pass fails ONLY because
+        // every healthy relay rate-limited us (no hard rejection, no success),
+        // we back off and retry the whole pass. The agent's reply is the one
+        // write that must not silently vanish — dropping it makes the agent
+        // look dead even though everything upstream worked. Hard rejections
+        // (bad event, restricted) are NOT retried; they won't change.
         let event_id = event.id.to_hex();
-        let mut last_err: Option<RelayError> = None;
-        for relay in &self.ws_urls {
-            match self.submit_event_ws_one(relay, event).await {
-                Ok(v) => {
-                    let accepted = v.get("accepted").and_then(|b| b.as_bool()).unwrap_or(false);
-                    if accepted {
-                        return Ok(v);
+        // Backoffs between full fan-out passes. `None` is the final pass with no
+        // further retry, so the loop runs `RETRY_BACKOFFS_MS.len() + 1` times.
+        const RETRY_BACKOFFS_MS: [u64; 3] = [800, 2000, 4000];
+        let backoffs: Vec<Option<u64>> = RETRY_BACKOFFS_MS
+            .iter()
+            .map(|ms| Some(*ms))
+            .chain(std::iter::once(None))
+            .collect();
+
+        for next_backoff in backoffs {
+            let mut last_err: Option<RelayError> = None;
+            let mut all_rate_limited = true;
+            let mut tried_any = false;
+
+            for relay in &self.ws_urls {
+                match self.submit_event_ws_one(relay, event).await {
+                    Ok(v) => {
+                        let accepted = v.get("accepted").and_then(|b| b.as_bool()).unwrap_or(false);
+                        if accepted {
+                            return Ok(v);
+                        }
+                        let msg = v
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        tried_any = true;
+                        if !msg.contains("rate-limit") {
+                            // A hard rejection (restricted/invalid) won't change
+                            // on retry — don't keep hammering for it.
+                            all_rate_limited = false;
+                        }
+                        tracing::warn!("relay {relay} rejected event (trying next): {msg}");
+                        last_err = Some(RelayError::Http(format!("relay rejected: {msg}")));
                     }
-                    let msg = v
-                        .get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    tracing::warn!("relay {relay} rejected event (trying next): {msg}");
-                    last_err = Some(RelayError::Http(format!("relay rejected: {msg}")));
-                }
-                Err(e) => {
-                    tracing::warn!("relay {relay} publish failed (trying next): {e}");
-                    last_err = Some(e);
+                    Err(e) => {
+                        // Connect/IO errors (dead/paid relay) are not rate-limits;
+                        // retrying the whole pass won't revive them, so don't loop
+                        // forever on a list of dead relays.
+                        all_rate_limited = false;
+                        tracing::warn!("relay {relay} publish failed (trying next): {e}");
+                        last_err = Some(e);
+                    }
                 }
             }
+
+            // Retry only when the sole reason for failure was rate-limiting and
+            // we actually got a rate-limit response from at least one relay, and
+            // there is another pass left.
+            if tried_any && all_rate_limited {
+                if let Some(backoff) = next_backoff {
+                    tracing::warn!(
+                        "all relays rate-limited event {event_id}; retrying in {backoff}ms"
+                    );
+                    tokio::time::sleep(Duration::from_millis(backoff)).await;
+                    continue;
+                }
+            }
+
+            return Err(last_err.unwrap_or_else(|| {
+                RelayError::Http(format!("no relay accepted event {event_id}"))
+            }));
         }
-        Err(last_err
-            .unwrap_or_else(|| RelayError::Http(format!("no relay accepted event {event_id}"))))
+
+        Err(RelayError::Http(format!(
+            "no relay accepted event {event_id} after retries"
+        )))
     }
 
     /// Publish a signed event to a single relay over plain WS (serverless mode)
@@ -778,6 +828,13 @@ impl HarnessRelay {
         let mut bg_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         let mut connected_any = false;
         let mut last_err: Option<RelayError> = None;
+        // Only the relays we actually connected to are usable for reads/writes.
+        // A relay that refuses the WebSocket handshake (403 Forbidden / paid /
+        // unreachable) will never serve this session — keeping it in the
+        // working set just makes discovery and publish waste time on it and,
+        // worse, can leave the agent's reply with no healthy relay to fail over
+        // to. Prune them up front.
+        let mut connected_urls: Vec<String> = Vec::new();
 
         for url in &relay_urls {
             let (ws, handshake_buffer) =
@@ -790,6 +847,7 @@ impl HarnessRelay {
                     }
                 };
             connected_any = true;
+            connected_urls.push(url.clone());
 
             let (task_cmd_tx, task_cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
             per_relay_cmd_tx.push(task_cmd_tx);
@@ -826,6 +884,23 @@ impl HarnessRelay {
             return Err(last_err.unwrap_or(RelayError::ConnectionClosed));
         }
 
+        // Reads/writes fan out only over relays that actually connected.
+        let working_urls = if connected_urls.is_empty() {
+            relay_urls.clone()
+        } else {
+            connected_urls
+        };
+        // Prefer a connected relay as the primary/display label.
+        let primary = working_urls.first().cloned().unwrap_or(primary);
+        if working_urls.len() < relay_urls.len() {
+            tracing::info!(
+                "serverless: using {}/{} relays that connected: {}",
+                working_urls.len(),
+                relay_urls.len(),
+                working_urls.join(", ")
+            );
+        }
+
         // Command fan-out: clone each command to every relay's task.
         let fanout_handle = tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
@@ -850,7 +925,7 @@ impl HarnessRelay {
                 .build()
                 .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
             relay_url: primary,
-            relay_urls,
+            relay_urls: working_urls,
             keys: keys.clone(),
             auth_tag,
             serverless,
