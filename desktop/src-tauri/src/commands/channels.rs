@@ -363,10 +363,12 @@ pub async fn create_channel(
     if state.is_serverless() {
         // No relay to process a kind:9007 command — publish the kind:39000
         // metadata and a kind:39002 membership (self) directly so the channel
-        // is discoverable via get_channels.
-        let my_pubkey = {
+        // is discoverable via get_channels. Build ChannelInfo from the locally
+        // signed metadata event rather than re-querying the relay, which can
+        // race against propagation/indexing lag (the "nothing happened" bug).
+        let (my_pubkey, keys) = {
             let keys = state.keys.lock().map_err(|e| e.to_string())?;
-            keys.public_key().to_hex()
+            (keys.public_key().to_hex(), keys.clone())
         };
         let meta = events::build_channel_metadata_serverless(
             &channel_uuid_string,
@@ -376,9 +378,16 @@ pub async fn create_channel(
             description.as_deref(),
             &[],
         )?;
+        let meta_event = meta
+            .clone()
+            .sign_with_keys(&keys)
+            .map_err(|e| format!("failed to sign channel metadata: {e}"))?;
         submit_event(meta, &state).await?;
         let members = events::build_channel_members_serverless(&channel_uuid_string, &[my_pubkey])?;
         submit_event(members, &state).await?;
+        // Return ChannelInfo derived from the event we just published (member,
+        // since we created it). No relay round-trip required.
+        return nostr_convert::channel_info_from_event(&meta_event, None, Some(true));
     } else {
         let builder = events::build_create_channel(
             channel_uuid,

@@ -36,10 +36,12 @@ pub async fn open_dm(
     let channel_id = if state.is_serverless() {
         // No relay to assign a channel id. Derive a deterministic id from the
         // sorted participant set (including self) so both sides converge on the
-        // same DM channel, then publish 39000 + 39002 directly.
-        let my_pubkey = {
+        // same DM channel, then publish 39000 + 39002 directly. Return
+        // ChannelInfo from the locally signed event rather than re-querying the
+        // relay (which races against propagation lag).
+        let (my_pubkey, keys) = {
             let keys = state.keys.lock().map_err(|e| e.to_string())?;
-            keys.public_key().to_hex()
+            (keys.public_key().to_hex(), keys.clone())
         };
         let mut participants: Vec<String> = pubkeys
             .iter()
@@ -59,11 +61,15 @@ pub async fn open_dm(
             None,
             &participants,
         )?;
+        let meta_event = meta
+            .clone()
+            .sign_with_keys(&keys)
+            .map_err(|e| format!("failed to sign DM metadata: {e}"))?;
         submit_event(meta, &state).await?;
         let members = events::build_channel_members_serverless(&channel_id, &participants)?;
         submit_event(members, &state).await?;
 
-        channel_id
+        return nostr_convert::channel_info_from_event(&meta_event, None, Some(true));
     } else {
         // Submit a kind:41010 dm-open event; the relay replies with the channel
         // id in its OK message payload.
