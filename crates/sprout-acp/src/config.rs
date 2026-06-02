@@ -810,10 +810,19 @@ impl Config {
             ));
         }
 
+        // Serverless if explicitly flagged OR the relay URL is a comma-separated
+        // LIST. A multi-relay URL is only ever produced by a serverless
+        // workspace, so this is a robust fallback when SPROUT_SERVERLESS wasn't
+        // set true at launch (e.g. the agent was restored before the desktop
+        // applied the workspace's serverless flag). Without this the agent runs
+        // in server mode against public relays → "No auth challenge received"
+        // and an HTTP-bridge channel-discovery crash.
+        let serverless = args.serverless || args.relay_url.contains(',');
+
         let config = Config {
             keys,
             relay_url: args.relay_url,
-            serverless: args.serverless,
+            serverless,
             agent_command,
             agent_args,
             mcp_command: args.mcp_command,
@@ -860,8 +869,9 @@ impl Config {
             other => format!("respond_to={other}"),
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}",
+            "relay={} serverless={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}",
             self.relay_url,
+            self.serverless,
             self.keys.public_key().to_hex(),
             self.agent_command,
             self.agent_args.join(" "),

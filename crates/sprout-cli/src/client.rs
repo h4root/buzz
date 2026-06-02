@@ -123,8 +123,11 @@ fn sign_nip98(
 pub struct SproutClient {
     http: reqwest::Client,
     relay_url: String, // base URL, no trailing slash, e.g. "https://relay.sprout.place"
-    /// WebSocket URL (ws/wss). Used only in serverless mode.
-    ws_url: String,
+    /// WebSocket URLs (ws/wss). Used only in serverless mode. In serverless we
+    /// fan out across all relays — publish succeeds if ANY relay accepts, and
+    /// queries merge+dedup results — matching the desktop relay pool and the
+    /// standard Nostr client model (relays don't gossip; clients talk to many).
+    ws_urls: Vec<String>,
     /// Serverless mode: talk to a generic relay over plain WebSocket instead
     /// of the Sprout HTTP bridge. See docs/SPROUT_LITE_MODE.md.
     serverless: bool,
@@ -144,6 +147,17 @@ impl SproutClient {
         auth_tag: Option<Tag>,
         auth_tag_json: Option<String>,
     ) -> Result<Self, CliError> {
+        // `ws_url` may be a comma-separated list of relays in serverless mode.
+        let ws_urls: Vec<String> = ws_url
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let ws_urls = if ws_urls.is_empty() {
+            vec![ws_url]
+        } else {
+            ws_urls
+        };
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
@@ -152,7 +166,7 @@ impl SproutClient {
         Ok(Self {
             http,
             relay_url,
-            ws_url,
+            ws_urls,
             serverless,
             keys,
             auth_tag,
@@ -312,10 +326,47 @@ impl SproutClient {
     /// JSON-array string of event objects (same shape as the HTTP `/query`
     /// bridge response, so downstream parsing is unchanged).
     async fn query_ws(&self, filters: &[serde_json::Value]) -> Result<String, CliError> {
+        // Fan out across all relays, merge results, dedup by event id. Relays
+        // don't gossip — a given event may live on only one relay, so a
+        // complete read must union every relay (the standard Nostr client
+        // model; see damus RelayPool / nostr-tools SimplePool).
+        let mut by_id: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
+        let mut last_err: Option<CliError> = None;
+        let mut any_ok = false;
+        for relay in &self.ws_urls {
+            match self.query_ws_one(relay, filters).await {
+                Ok(events) => {
+                    any_ok = true;
+                    for ev in events {
+                        if let Some(id) = ev.get("id").and_then(|v| v.as_str()) {
+                            by_id.entry(id.to_string()).or_insert(ev);
+                        }
+                    }
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if !any_ok {
+            if let Some(e) = last_err {
+                return Err(e);
+            }
+        }
+        let merged: Vec<serde_json::Value> = by_id.into_values().collect();
+        Ok(serde_json::Value::Array(merged).to_string())
+    }
+
+    /// Query a single relay over plain WS: REQ → collect EVENTs until EOSE →
+    /// CLOSE. Answers a NIP-42 AUTH challenge if the relay sends one.
+    async fn query_ws_one(
+        &self,
+        relay: &str,
+        filters: &[serde_json::Value],
+    ) -> Result<Vec<serde_json::Value>, CliError> {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-        let (ws, _) = connect_async(self.ws_url.as_str())
+        let (ws, _) = connect_async(relay)
             .await
             .map_err(|e| CliError::NetworkMsg(format!("relay connect failed: {e}")))?;
         let (mut write, mut read) = ws.split();
@@ -360,7 +411,7 @@ impl SproutClient {
                     "CLOSED" if sub_matches => return Ok(()),
                     "AUTH" => {
                         if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                            if let Ok(json) = self.ws_auth_message(challenge) {
+                            if let Ok(json) = self.ws_auth_message(relay, challenge) {
                                 let _ = write.send(Message::Text(json.into())).await;
                             }
                         }
@@ -379,12 +430,12 @@ impl SproutClient {
         let _ = write.close().await;
 
         match collect {
-            Ok(Ok(())) | Err(_) => Ok(serde_json::Value::Array(events).to_string()),
+            Ok(Ok(())) | Err(_) => Ok(events),
             Ok(Err(e)) => {
                 if events.is_empty() {
                     Err(CliError::NetworkMsg(e))
                 } else {
-                    Ok(serde_json::Value::Array(events).to_string())
+                    Ok(events)
                 }
             }
         }
@@ -394,10 +445,32 @@ impl SproutClient {
     /// a NIP-42 AUTH challenge if sent. Returns the relay response as a JSON
     /// string (`{event_id, accepted, message}`) matching the HTTP bridge shape.
     async fn submit_event_ws(&self, event: &nostr::Event) -> Result<String, CliError> {
+        // Fan out to every relay; succeed if ANY accepts. This is what makes
+        // serverless writes resilient to a single relay rate-limiting
+        // ("noting too much") or being down — the desktop relay pool does the
+        // same. We try relays in order and return on the first acceptance.
+        let event_id = event.id.to_hex();
+        let mut last_err: Option<CliError> = None;
+        for relay in &self.ws_urls {
+            match self.submit_event_ws_one(relay, event).await {
+                Ok(msg) => return Ok(msg),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| CliError::Other(format!("no relay accepted event {event_id}"))))
+    }
+
+    /// Publish a signed event to a single relay over plain WS and wait for OK.
+    async fn submit_event_ws_one(
+        &self,
+        relay: &str,
+        event: &nostr::Event,
+    ) -> Result<String, CliError> {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-        let (ws, _) = connect_async(self.ws_url.as_str())
+        let (ws, _) = connect_async(relay)
             .await
             .map_err(|e| CliError::NetworkMsg(format!("relay connect failed: {e}")))?;
         let (mut write, mut read) = ws.split();
@@ -436,7 +509,7 @@ impl SproutClient {
                     }
                     "AUTH" => {
                         if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                            if let Ok(json) = self.ws_auth_message(challenge) {
+                            if let Ok(json) = self.ws_auth_message(relay, challenge) {
                                 let _ = write.send(Message::Text(json.into())).await;
                                 let _ = write.send(Message::Text(event_msg.clone().into())).await;
                             }
@@ -470,8 +543,8 @@ impl SproutClient {
     }
 
     /// Build a NIP-42 `["AUTH", <event>]` message string for serverless writes.
-    fn ws_auth_message(&self, challenge: &str) -> Result<String, CliError> {
-        let url = nostr::RelayUrl::parse(&self.ws_url)
+    fn ws_auth_message(&self, relay: &str, challenge: &str) -> Result<String, CliError> {
+        let url = nostr::RelayUrl::parse(relay)
             .map_err(|e| CliError::Other(format!("invalid relay URL: {e}")))?;
         let event = EventBuilder::auth(challenge.to_string(), url)
             .sign_with_keys(&self.keys)

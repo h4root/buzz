@@ -107,8 +107,13 @@ pub struct RestClient {
     /// When true, `base_url` is ignored and `ws_url` is used. See
     /// docs/SPROUT_LITE_MODE.md.
     pub serverless: bool,
-    /// WebSocket URL of the relay (used only in serverless mode).
-    pub ws_url: String,
+    /// WebSocket URLs of the relays (used only in serverless mode). In
+    /// serverless we fan out across ALL relays: queries merge+dedup results
+    /// and publishes succeed if ANY relay accepts. Relays don't gossip, so a
+    /// read must union every relay and a write must tolerate one relay being
+    /// down or rate-limiting — the standard Nostr client model (damus
+    /// `RelayPool`, nostr-tools `SimplePool`).
+    pub ws_urls: Vec<String>,
 }
 
 /// Whether an HTTP status code is retriable (transient server/rate-limit errors).
@@ -307,10 +312,45 @@ impl RestClient {
     /// NIP-42 AUTH challenge if the relay sends one. Returns a JSON array of
     /// event objects (same shape as the HTTP `/query` bridge).
     async fn query_ws(&self, filters: &[nostr::Filter]) -> Result<Value, RelayError> {
+        // Fan out across all relays, merge results, dedup by event id. Relays
+        // don't gossip — a complete read must union every relay. A single
+        // relay failing (503, connect error) does NOT fail the whole query as
+        // long as at least one relay answered.
+        let mut by_id: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+        let mut last_err: Option<RelayError> = None;
+        let mut any_ok = false;
+        for relay in &self.ws_urls {
+            match self.query_ws_one(relay, filters).await {
+                Ok(events) => {
+                    any_ok = true;
+                    for ev in events {
+                        if let Some(id) = ev.get("id").and_then(|v| v.as_str()) {
+                            by_id.entry(id.to_string()).or_insert(ev);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("query relay failed (continuing): {e}");
+                    last_err = Some(e);
+                }
+            }
+        }
+        if !any_ok {
+            return Err(last_err.unwrap_or(RelayError::ConnectionClosed));
+        }
+        Ok(Value::Array(by_id.into_values().collect()))
+    }
+
+    /// Query a single relay over plain WS (serverless mode): REQ → collect
+    /// EVENTs until EOSE → CLOSE. Answers a NIP-42 AUTH challenge if sent.
+    async fn query_ws_one(
+        &self,
+        relay: &str,
+        filters: &[nostr::Filter],
+    ) -> Result<Vec<Value>, RelayError> {
         use futures_util::{SinkExt, StreamExt};
 
-        let parsed = self
-            .ws_url
+        let parsed = relay
             .parse::<url::Url>()
             .map_err(|e| RelayError::Http(format!("invalid relay URL: {e}")))?;
         let (ws, _) = timeout(CONNECT_TIMEOUT, connect_async(parsed.as_str()))
@@ -356,7 +396,7 @@ impl RestClient {
                     "CLOSED" if sub_matches => return Ok(()),
                     "AUTH" => {
                         if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                            if let Ok(json) = self.ws_auth_message(challenge) {
+                            if let Ok(json) = self.ws_auth_message(relay, challenge) {
                                 let _ = write.send(Message::Text(json.into())).await;
                             }
                         }
@@ -379,12 +419,12 @@ impl RestClient {
         // Timeout or early close → return whatever arrived (public relays are
         // often slow to EOSE; partial results beat a hard failure).
         match collect {
-            Ok(Ok(())) | Err(_) => Ok(Value::Array(events)),
+            Ok(Ok(())) | Err(_) => Ok(events),
             Ok(Err(e)) => {
                 if events.is_empty() {
                     Err(e)
                 } else {
-                    Ok(Value::Array(events))
+                    Ok(events)
                 }
             }
         }
@@ -393,10 +433,42 @@ impl RestClient {
     /// Publish a signed event over a plain WebSocket (serverless mode) and wait
     /// for the relay's `OK`. Answers a NIP-42 AUTH challenge if sent.
     async fn submit_event_ws(&self, event: &Event) -> Result<Value, RelayError> {
+        // Fan out to every relay; succeed if ANY accepts. This makes the
+        // agent's replies resilient to a single relay rate-limiting ("noting
+        // too much") or being down — exactly what the desktop relay pool does.
+        let event_id = event.id.to_hex();
+        let mut last_err: Option<RelayError> = None;
+        for relay in &self.ws_urls {
+            match self.submit_event_ws_one(relay, event).await {
+                Ok(v) => {
+                    let accepted = v.get("accepted").and_then(|b| b.as_bool()).unwrap_or(false);
+                    if accepted {
+                        return Ok(v);
+                    }
+                    let msg = v
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    tracing::warn!("relay {relay} rejected event (trying next): {msg}");
+                    last_err = Some(RelayError::Http(format!("relay rejected: {msg}")));
+                }
+                Err(e) => {
+                    tracing::warn!("relay {relay} publish failed (trying next): {e}");
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| RelayError::Http(format!("no relay accepted event {event_id}"))))
+    }
+
+    /// Publish a signed event to a single relay over plain WS (serverless mode)
+    /// and wait for the relay's `OK`. Answers a NIP-42 AUTH challenge if sent.
+    async fn submit_event_ws_one(&self, relay: &str, event: &Event) -> Result<Value, RelayError> {
         use futures_util::{SinkExt, StreamExt};
 
-        let parsed = self
-            .ws_url
+        let parsed = relay
             .parse::<url::Url>()
             .map_err(|e| RelayError::Http(format!("invalid relay URL: {e}")))?;
         let (ws, _) = timeout(CONNECT_TIMEOUT, connect_async(parsed.as_str()))
@@ -444,7 +516,7 @@ impl RestClient {
                     }
                     "AUTH" => {
                         if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                            if let Ok(json) = self.ws_auth_message(challenge) {
+                            if let Ok(json) = self.ws_auth_message(relay, challenge) {
                                 let _ = write.send(Message::Text(json.into())).await;
                                 let _ = write.send(Message::Text(event_msg.clone().into())).await;
                             }
@@ -475,8 +547,8 @@ impl RestClient {
     }
 
     /// Build a NIP-42 `["AUTH", <event>]` message string for serverless writes.
-    fn ws_auth_message(&self, challenge: &str) -> Result<String, RelayError> {
-        let url = nostr::RelayUrl::parse(&self.ws_url)
+    fn ws_auth_message(&self, relay: &str, challenge: &str) -> Result<String, RelayError> {
+        let url = nostr::RelayUrl::parse(relay)
             .map_err(|e| RelayError::Http(format!("invalid relay URL: {e}")))?;
         let event = EventBuilder::auth(challenge.to_string(), url)
             .sign_with_keys(&self.keys)
@@ -622,8 +694,12 @@ pub struct HarnessRelay {
     cmd_tx: mpsc::Sender<RelayCommand>,
     /// HTTP client for HTTP bridge calls.
     http: reqwest::Client,
-    /// WebSocket URL of the relay.
+    /// Primary relay URL (first in the list). Used for HTTP-bridge (server)
+    /// mode and as a display label.
     relay_url: String,
+    /// Full relay list (serverless mode). Reads/writes fan out across all of
+    /// these — see `RestClient` for the merge/first-accepts semantics.
+    relay_urls: Vec<String>,
     /// Keys used for NIP-42 signing and NIP-98 HTTP auth.
     keys: Keys,
     /// Optional NIP-OA auth tag for relay membership delegation.
@@ -774,6 +850,7 @@ impl HarnessRelay {
                 .build()
                 .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
             relay_url: primary,
+            relay_urls,
             keys: keys.clone(),
             auth_tag,
             serverless,
@@ -906,7 +983,11 @@ impl HarnessRelay {
                 .as_ref()
                 .and_then(|t| serde_json::to_string(t.as_slice()).ok()),
             serverless: self.serverless,
-            ws_url: self.relay_url.clone(),
+            ws_urls: if self.relay_urls.is_empty() {
+                vec![self.relay_url.clone()]
+            } else {
+                self.relay_urls.clone()
+            },
         }
     }
 
@@ -2081,7 +2162,31 @@ async fn handle_ws_message(
                     );
 
                     if is_auth_error {
-                        // Auth errors require a full reconnect (re-handshake).
+                        // Serverless: a generic/paid public relay (e.g. nostr.land,
+                        // nostr.wine) may permanently require auth or payment to
+                        // read. Re-handshaking won't help — reconnecting just hits
+                        // the same auth-required CLOSED forever (a reconnect storm
+                        // that churns ALL relays and starves message processing).
+                        // Drop this subscription on THIS relay and keep the
+                        // connection alive; the OTHER relays still serve the agent.
+                        if state.serverless {
+                            warn!(
+                                "serverless: relay {relay_url} rejected subscription {subscription_id} ({message}) — \
+                                 dropping it on this relay (other relays still serve the agent), not reconnecting"
+                            );
+                            // Return true (keep the connection alive, NO reconnect)
+                            // and stop tracking this sub on this relay so we don't
+                            // resubscribe it into an infinite auth-required storm.
+                            if let Some(channel_id) = channel_id_from_sub_id(&subscription_id) {
+                                state.active_subscriptions.remove(&channel_id);
+                            } else if subscription_id == OBSERVER_CONTROL_SUB_ID {
+                                state.observer_control_sub_active = false;
+                            } else if subscription_id == MEMBERSHIP_NOTIF_SUB_ID {
+                                state.membership_sub_active = false;
+                            }
+                            return true;
+                        }
+                        // Server mode: auth errors require a full reconnect (re-handshake).
                         return false;
                     }
 

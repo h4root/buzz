@@ -2,9 +2,12 @@
  * Default public Nostr relays offered as quick-picks when creating a
  * serverless workspace.
  *
- * Sourced from the deez mesh client's `DEFAULT_RELAYS`
- * (`deez/crates/mesh-client/src/network/nostr.rs`) so Sprout's serverless mode
- * and the mesh ecosystem converge on the same well-known relays.
+ * Originally sourced from the deez mesh client's `DEFAULT_RELAYS`
+ * (`deez/crates/mesh-client/src/network/nostr.rs`), but trimmed to the FREE,
+ * open relays. `nostr.land` and `nostr.wine` are PAID relays: they answer
+ * `auth-required` / `restricted: Pay for access` on reads, which is useless for
+ * an open serverless workspace and previously caused an auth-required reconnect
+ * storm in the agent. Keep only relays that allow anonymous read/write.
  *
  * These are only suggestions — users can type any relay URL. They apply only
  * to serverless workspaces; Sprout-server workspaces use their own relay.
@@ -13,8 +16,6 @@ export const DEFAULT_PUBLIC_RELAYS: readonly string[] = [
   "wss://relay.damus.io",
   "wss://nos.lol",
   "wss://relay.nostr.band",
-  "wss://nostr.land",
-  "wss://nostr.wine",
 ] as const;
 
 /** The relays pre-filled (comma-joined) when a user first enables serverless mode. */
