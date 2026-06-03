@@ -68,7 +68,7 @@ export function WorkspaceSwitcher({
   const connectionState = useRelayConnection();
   const degraded = isRelayConnectionDegraded(connectionState);
   const connectionLabel = CONNECTION_STATE_LABEL[connectionState];
-  const isProfileLike = variant === "profile" || variant === "profile-menu";
+  const isProfileVariant = variant === "profile";
 
   function clearProfileMenuHoverTimer() {
     if (profileMenuHoverTimer.current !== null) {
@@ -114,24 +114,24 @@ export function WorkspaceSwitcher({
             <span
               aria-hidden="false"
               className={
-                isProfileLike
+                isProfileVariant
                   ? "flex h-5 w-5 shrink-0 animate-pulse items-center justify-center rounded-md border border-sidebar-border/70 bg-sidebar-accent/40 text-destructive"
                   : "flex h-5 w-5 shrink-0 animate-pulse items-center justify-center text-destructive"
               }
               data-testid="relay-connection-warning"
               role="img"
             >
-              <WifiOff className={isProfileLike ? "h-3 w-3" : "h-4 w-4"} />
+              <WifiOff className={isProfileVariant ? "h-3 w-3" : "h-4 w-4"} />
             </span>
           </TooltipTrigger>
-          <TooltipContent side={isProfileLike ? "top" : "bottom"}>
+          <TooltipContent side={isProfileVariant ? "top" : "bottom"}>
             {connectionLabel}
           </TooltipContent>
         </Tooltip>
       ) : (
         <span
           className={
-            isProfileLike
+            isProfileVariant
               ? "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-sidebar-border/70 bg-sidebar-accent/40 text-[10px] leading-none"
               : "flex h-5 w-5 shrink-0 items-center justify-center text-xs leading-none"
           }
@@ -153,7 +153,7 @@ export function WorkspaceSwitcher({
       ) : (
         <ChevronDown
           className={
-            isProfileLike
+            isProfileVariant
               ? "h-3 w-3 shrink-0 text-sidebar-foreground/45"
               : "h-3.5 w-3.5 shrink-0 text-sidebar-foreground/50"
           }
@@ -251,18 +251,14 @@ export function WorkspaceSwitcher({
   const switcherDropdown = (
     <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
       <DropdownMenuTrigger asChild>
-        {isProfileLike ? (
+        {variant === "profile" ? (
           <button
             aria-label={
               degraded
                 ? `${activeWorkspace?.name ?? "Workspace"} — ${connectionLabel}`
                 : "Switch workspace"
             }
-            className={
-              variant === "profile-menu"
-                ? "flex w-full min-w-0 items-center gap-3 py-0.5 text-left text-sm text-popover-foreground outline-hidden transition-colors hover:text-popover-foreground focus:outline-none focus-visible:outline-none data-[state=open]:text-popover-foreground"
-                : "flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-sidebar-foreground/50 outline-hidden transition-colors hover:text-sidebar-foreground focus:outline-none focus-visible:outline-none data-[state=open]:text-sidebar-foreground"
-            }
+            className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-sidebar-foreground/50 outline-hidden transition-colors hover:text-sidebar-foreground focus:outline-none focus-visible:outline-none data-[state=open]:text-sidebar-foreground"
             data-testid="workspace-switcher"
             type="button"
           >

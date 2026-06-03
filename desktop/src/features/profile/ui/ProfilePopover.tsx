@@ -23,7 +23,6 @@ interface ProfilePopoverProps {
   userStatusEmoji?: string;
   onSetStatus: (status: PresenceStatus) => void;
   onSetUserStatus: (text: string, emoji: string) => void;
-  onClearUserStatus: () => void;
   onOpenSettings: (section?: "profile" | "appearance") => void;
   children: React.ReactNode;
   // Optional outer container whose clicks should NOT close the popover.
@@ -60,7 +59,6 @@ export function ProfilePopover({
   userStatusEmoji,
   onSetStatus,
   onSetUserStatus,
-  onClearUserStatus,
   onOpenSettings,
   children,
   triggerContainerRef,
@@ -292,7 +290,6 @@ export function ProfilePopover({
         hasExistingStatus={hasUserStatus}
         initialEmoji={userStatusEmoji}
         initialText={userStatusText}
-        onClear={onClearUserStatus}
         onOpenChange={setStatusDialogOpen}
         onSave={onSetUserStatus}
         open={statusDialogOpen}

@@ -12,7 +12,6 @@ import { cn } from "@/shared/lib/cn";
 type SidebarProfileCardProps = {
   activeWorkspace: Workspace | null;
   isPresencePending?: boolean;
-  onClearUserStatus: () => void;
   onOpenAddWorkspace: () => void;
   onOpenSettings: (section?: "profile" | "appearance") => void;
   onRemoveWorkspace: (id: string) => void;
@@ -33,7 +32,6 @@ type SidebarProfileCardProps = {
 export function SidebarProfileCard({
   activeWorkspace,
   isPresencePending,
-  onClearUserStatus,
   onOpenAddWorkspace,
   onOpenSettings,
   onRemoveWorkspace,
@@ -53,10 +51,23 @@ export function SidebarProfileCard({
     () => setProfilePopoverOpen((prev) => !prev),
     [],
   );
+  const handleCardClick = React.useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target;
+      if (
+        !(target instanceof Node) ||
+        !profileCardRef.current?.contains(target)
+      ) {
+        return;
+      }
+      toggleProfilePopover();
+    },
+    [toggleProfilePopover],
+  );
   const hasStatus = Boolean(selfUserStatus?.text || selfUserStatus?.emoji);
   const workspaceLabel = activeWorkspace?.name ?? "No workspace";
   const readonlyWorkspaceLabel = (
-    <span className="flex min-w-0 items-center gap-1 text-xs leading-snug text-sidebar-foreground/70">
+    <span className="flex min-w-0 cursor-pointer items-center gap-1 text-xs leading-snug text-sidebar-foreground/70">
       <span aria-hidden="true" className="shrink-0 text-[10px] leading-none">
         🌱
       </span>
@@ -65,9 +76,11 @@ export function SidebarProfileCard({
   );
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: child buttons provide keyboard access; wrapper fills pointer gaps between them.
     <div
-      className="group/profile-card rounded-xl px-2 py-2 transition-colors hover:bg-sidebar-border/35 dark:hover:bg-sidebar-border/30"
+      className="group/profile-card cursor-pointer rounded-xl px-2 py-2 transition-colors hover:bg-sidebar-border/35 dark:hover:bg-sidebar-border/30"
       data-testid="sidebar-profile-card"
+      onClick={handleCardClick}
       ref={profileCardRef}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -75,7 +88,10 @@ export function SidebarProfileCard({
           aria-label={`Open profile menu for ${resolvedDisplayName}`}
           className="relative shrink-0 rounded-xl outline-hidden focus:outline-none focus-visible:outline-none"
           data-testid="sidebar-profile-avatar-button"
-          onClick={toggleProfilePopover}
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleProfilePopover();
+          }}
           type="button"
         >
           <ProfileAvatar
@@ -107,7 +123,6 @@ export function SidebarProfileCard({
             userStatusEmoji={selfUserStatus?.emoji}
             onSetStatus={onSetPresenceStatus ?? (() => {})}
             onSetUserStatus={onSetUserStatus}
-            onClearUserStatus={onClearUserStatus}
             onOpenSettings={onOpenSettings}
             triggerContainerRef={profileCardRef}
             workspaceSwitcherSlot={
@@ -123,6 +138,10 @@ export function SidebarProfileCard({
             }
           >
             <button
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleProfilePopover();
+              }}
               className="block w-full min-w-0 rounded-sm text-left text-sidebar-foreground outline-hidden focus:outline-none focus-visible:outline-none"
               data-testid="open-settings"
               type="button"
@@ -145,7 +164,10 @@ export function SidebarProfileCard({
                   profilePopoverOpen && "opacity-100",
                 )}
                 data-testid="sidebar-profile-user-status"
-                onClick={toggleProfilePopover}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleProfilePopover();
+                }}
                 type="button"
               >
                 {selfUserStatus?.emoji ? (
