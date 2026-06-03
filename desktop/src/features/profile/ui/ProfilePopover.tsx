@@ -134,21 +134,21 @@ export function ProfilePopover({
         >
           <div aria-label="Profile menu" role="menu">
             {/* ── Identity block ─────────────────────────────────── */}
-            <div className="flex items-center gap-3 px-4 pt-3 pb-2">
+            <div className="flex items-center gap-2 px-4 pt-3 pb-2">
               <div className="relative shrink-0">
                 <ProfileAvatar
                   avatarUrl={avatarUrl}
-                  className="h-10 w-10 rounded-2xl text-sm"
-                  iconClassName="h-5 w-5"
+                  className="h-8 w-8 rounded-xl text-xs"
+                  iconClassName="h-4 w-4"
                   label={displayName}
                 />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-popover-foreground">
+                <p className="truncate text-sm font-semibold leading-tight text-popover-foreground">
                   {displayName}
                 </p>
                 <p
-                  className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted-foreground"
+                  className="mt-0.5 flex items-center gap-1.5 truncate text-xs leading-snug text-muted-foreground"
                   data-testid="profile-popover-current-status"
                 >
                   <PresenceDot className="h-2 w-2" status={currentStatus} />
