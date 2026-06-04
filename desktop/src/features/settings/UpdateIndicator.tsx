@@ -1,6 +1,7 @@
 import { Loader2, RefreshCcw, RotateCw } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
+import { cn } from "@/shared/lib/cn";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 import { useUpdaterContext } from "./hooks/UpdaterProvider";
@@ -58,7 +59,13 @@ function getVariant(state: UpdateStatus["state"]) {
   return null;
 }
 
-export function UpdateIndicator({ className }: { className?: string }) {
+export function UpdateIndicator({
+  className,
+  iconClassName,
+}: {
+  className?: string;
+  iconClassName?: string;
+}) {
   const { status, downloadAndInstall, relaunch } = useUpdaterContext();
   const variant = getVariant(status.state);
 
@@ -80,7 +87,7 @@ export function UpdateIndicator({ className }: { className?: string }) {
       <TooltipTrigger asChild>
         <Button
           aria-label={label}
-          className={`${indicatorButtonClass} ${className ?? ""}`}
+          className={cn(indicatorButtonClass, className)}
           disabled={!isActionable}
           onClick={() => {
             if (handleClick) {
@@ -91,7 +98,7 @@ export function UpdateIndicator({ className }: { className?: string }) {
           type="button"
           variant="ghost"
         >
-          <Icon className={variantIconClass} />
+          <Icon className={cn(variantIconClass, iconClassName)} />
           <span
             className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full ${badgeColor} animate-pulse`}
           />

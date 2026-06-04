@@ -87,7 +87,7 @@ export function ChannelMembersBar({
       <div className="flex items-center gap-1">
         <Button
           aria-label="Add agent"
-          className="h-7 w-7 rounded-full"
+          className="h-6 w-6 rounded-full"
           data-testid="channel-add-bot-trigger"
           disabled={!canAddAgents}
           onClick={() => {
@@ -97,25 +97,25 @@ export function ChannelMembersBar({
           type="button"
           variant="outline"
         >
-          <Plus className="h-3 w-3" />
+          <Plus className="h-2.5 w-2.5" />
         </Button>
 
         <Button
           aria-label={`View channel members (${memberCount})`}
-          className="h-7 gap-1 rounded-full px-2"
+          className="h-6 gap-1 rounded-full px-1.5"
           data-testid="channel-members-trigger"
           onClick={onToggleMembers}
           type="button"
           variant="outline"
         >
-          <Users className="h-3 w-3" />
-          <span className="min-w-[1ch] text-[11px] font-medium tabular-nums">
+          <Users className="h-2 w-2" />
+          <span className="min-w-[1ch] text-[10px] font-medium tabular-nums">
             {memberCount}
           </span>
         </Button>
 
         <HuddleIndicator
-          className="h-7 w-7"
+          className="h-6 w-6 [&_svg]:h-3 [&_svg]:w-3"
           channelId={channel.id}
           onStart={async () => {
             try {
@@ -132,14 +132,14 @@ export function ChannelMembersBar({
 
         <Button
           aria-label="Manage channel"
-          className="h-7 w-7 rounded-full"
+          className="h-6 w-6 rounded-full"
           data-testid="channel-management-trigger"
           onClick={onManageChannel}
           size="icon"
           type="button"
           variant="outline"
         >
-          <Settings2 className="h-3 w-3" />
+          <Settings2 className="h-2 w-2" />
         </Button>
       </div>
 

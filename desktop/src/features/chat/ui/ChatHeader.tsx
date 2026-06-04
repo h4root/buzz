@@ -91,6 +91,13 @@ export function ChatHeader({
   statusBadge,
 }: ChatHeaderProps) {
   const trimmedDescription = description?.trim() ?? "";
+  const compactUpdateIndicatorProps =
+    density === "compact"
+      ? {
+          className: "h-6 w-6",
+          iconClassName: "h-3 w-3",
+        }
+      : {};
   const topRightActions = (
     <div className="fixed right-3 top-[9px] z-[45] flex shrink-0 items-center gap-1">
       <UpdateIndicator />
@@ -138,7 +145,7 @@ export function ChatHeader({
         )
       ) : (
         <div className="flex shrink-0 items-center gap-1">
-          <UpdateIndicator />
+          <UpdateIndicator {...compactUpdateIndicatorProps} />
           {actions ? <div className="shrink-0">{actions}</div> : null}
         </div>
       )}

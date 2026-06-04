@@ -79,7 +79,6 @@ export function ChannelScreenHeader({
 
   return (
     <ChatHeader
-      actionsPlacement="top-right"
       belowSystemChrome
       density="compact"
       actions={actions}
