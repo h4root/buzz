@@ -10,8 +10,8 @@ import {
   isBroadcastReply,
 } from "@/features/messages/lib/threading";
 import {
-  shouldNotifyForEvent,
   isHighPriorityEventForUser,
+  shouldNotifyForEvent,
 } from "@/features/notifications/lib/shouldNotify";
 import type { RelayClient } from "@/shared/api/relayClientSession";
 import type { Channel, RelayEvent } from "@/shared/api/types";
@@ -20,6 +20,7 @@ import { CHANNEL_MESSAGE_EVENT_KINDS } from "@/shared/constants/kinds";
 type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions & {
   pubkey?: string;
   relayClient?: RelayClient;
+  mutedChannelIds?: ReadonlySet<string>;
 };
 
 // Per-channel cap on the catch-up REQ. We only consume the *max matching*
@@ -226,7 +227,12 @@ export function useUnreadChannels(
   activeReadAt?: string | null,
   options: UseUnreadChannelsOptions = {},
 ) {
-  const { pubkey, relayClient, ...liveUpdateOptions } = options;
+  const {
+    pubkey,
+    relayClient,
+    mutedChannelIds: mutedChannelIdsOption,
+    ...liveUpdateOptions
+  } = options;
   const activeChannelId = activeChannel?.id ?? null;
   const activeChannelLastMessageAt = activeChannel?.lastMessageAt ?? null;
   const normalizedPubkey = pubkey?.toLowerCase() ?? null;
@@ -241,6 +247,8 @@ export function useUnreadChannels(
     isReady: isReadStateReady,
     markContextRead,
     markContextUnread,
+    drainSyncedRollbacks,
+    drainSyncedAdvances,
     readStateVersion,
   } = useReadState(pubkey, relayClient);
 
@@ -266,6 +274,30 @@ export function useUnreadChannels(
   // against. Cleared when the user opens the channel.
   const forcedUnreadRef = React.useRef(new Set<string>());
 
+  // When a synced event rolls back a read marker (cross-device mark-as-unread),
+  // merge into forcedUnreadRef so the badge appears immediately without waiting
+  // for a catch-up REQ that already ran with the old (higher) marker.
+  // When a synced event advances a read marker (cross-device mark-as-read),
+  // remove from forcedUnreadRef so the dot clears immediately.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion is the intentional drain trigger
+  React.useEffect(() => {
+    const rolled = drainSyncedRollbacks();
+    const advanced = drainSyncedAdvances();
+    let anyNew = false;
+    for (const channelId of rolled) {
+      if (!forcedUnreadRef.current.has(channelId)) {
+        forcedUnreadRef.current.add(channelId);
+        anyNew = true;
+      }
+    }
+    for (const channelId of advanced) {
+      if (forcedUnreadRef.current.delete(channelId)) {
+        anyNew = true;
+      }
+    }
+    if (anyNew) bumpLatestVersion();
+  }, [readStateVersion, drainSyncedRollbacks, drainSyncedAdvances]);
+
   // Root event IDs of threads where the current user has replied at least once.
   // Used to determine if thread replies should trigger unread notifications.
   const participatedRootIdsRef = React.useRef(new Set<string>());
@@ -277,6 +309,11 @@ export function useUnreadChannels(
   // Root event IDs of threads the user has explicitly muted. Takes precedence
   // over participation, follow, and authorship for notification suppression.
   const mutedRootIdsRef = React.useRef(new Set<string>());
+
+  // Stable ref for the caller-supplied muted channel IDs. Updated every render
+  // so the catch-up loop always reads the latest set without being a dep.
+  const mutedChannelIdsRef = React.useRef<ReadonlySet<string>>(new Set());
+  mutedChannelIdsRef.current = mutedChannelIdsOption ?? new Set();
 
   // Thread reply events that triggered notifications — surfaced in the Home
   // activity feed as synthetic FeedItems.
@@ -496,6 +533,7 @@ export function useUnreadChannels(
     followedRootIds: liveUpdateOptions.followedRootIds,
     authoredRootIds: authoredRootIdsRef.current,
     mutedRootIds: mutedRootIdsRef.current,
+    mutedChannelIds: mutedChannelIdsRef.current,
   });
 
   // Effect-key the catch-up on the *set* of channel IDs, not the array
@@ -602,15 +640,17 @@ export function useUnreadChannels(
               continue;
             }
             if (readAt !== null && event.created_at <= readAt) continue;
+            const eventChannelId =
+              event.tags.find((t) => t[0] === "h")?.[1] ?? null;
             if (
-              !shouldNotifyForEvent(
-                event,
-                normalizedPubkey ?? "",
-                participatedRootIdsRef.current,
-                options.followedRootIds ?? EMPTY_SET,
-                authoredRootIdsRef.current,
-                mutedRootIdsRef.current,
-              )
+              !shouldNotifyForEvent(event, normalizedPubkey ?? "", {
+                participatedRootIds: participatedRootIdsRef.current,
+                followedRootIds: options.followedRootIds ?? EMPTY_SET,
+                authoredRootIds: authoredRootIdsRef.current,
+                mutedRootIds: mutedRootIdsRef.current,
+                mutedChannelIds: mutedChannelIdsRef.current,
+                channelId: eventChannelId,
+              })
             ) {
               continue;
             }

@@ -16,13 +16,7 @@ import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import type { Workspace } from "@/features/workspaces/types";
 import { useIsServerless } from "@/features/workspaces/ServerlessContext";
 import { AddWorkspaceDialog } from "@/features/workspaces/ui/AddWorkspaceDialog";
-import { WorkspaceSwitcher } from "@/features/workspaces/ui/WorkspaceSwitcher";
 import { useDeferredLoad } from "@/shared/hooks/useDeferredStartup";
-import { getPresenceLabel } from "@/features/presence/lib/presence";
-import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import { ProfilePopover } from "@/features/profile/ui/ProfilePopover";
-import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import {
   useChannelSections,
   type ChannelSection,
@@ -44,6 +38,7 @@ import {
 } from "@/features/sidebar/ui/CustomChannelSection";
 import { CreateChannelDialog } from "@/features/sidebar/ui/CreateChannelDialog";
 import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
+import { SidebarProfileCard } from "@/features/sidebar/ui/SidebarProfileCard";
 import type {
   Channel,
   ChannelVisibility,
@@ -68,7 +63,11 @@ import {
   SidebarMenuSkeleton,
 } from "@/shared/ui/sidebar";
 
-type CollapsibleSidebarGroup = "channels" | "forums" | "directMessages";
+type CollapsibleSidebarGroup =
+  | "starred"
+  | "channels"
+  | "forums"
+  | "directMessages";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -141,7 +140,7 @@ type AppSidebarProps = {
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
-  onSelectSettings: () => void;
+  onSelectSettings: (section?: "profile" | "appearance") => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
   onSetUserStatus: (text: string, emoji: string) => void;
   onClearUserStatus: () => void;
@@ -152,6 +151,12 @@ type AppSidebarProps = {
   onNewDmOpenChange?: (open: boolean) => void;
   isCreateChannelOpen?: boolean;
   onCreateChannelOpenChange?: (open: boolean) => void;
+  mutedChannelIds?: ReadonlySet<string>;
+  onMuteChannel?: (channelId: string) => void;
+  onUnmuteChannel?: (channelId: string) => void;
+  starredChannelIds?: ReadonlySet<string>;
+  onStarChannel?: (channelId: string) => void;
+  onUnstarChannel?: (channelId: string) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -207,6 +212,12 @@ export function AppSidebar({
   onNewDmOpenChange,
   isCreateChannelOpen: isCreateChannelOpenProp,
   onCreateChannelOpenChange,
+  mutedChannelIds,
+  onMuteChannel,
+  onUnmuteChannel,
+  starredChannelIds,
+  onStarChannel,
+  onUnstarChannel,
 }: AppSidebarProps) {
   // Pulse, Projects (git hosting), and Workflows are Sprout-server features
   // with no generic-relay equivalent. Hide them in serverless mode.
@@ -217,7 +228,6 @@ export function AppSidebar({
   const setIsNewDmOpen = onNewDmOpenChange ?? setIsNewDmOpenInternal;
   const scrollRef = React.useRef<HTMLDivElement>(null);
   useSidebarScrollLock(scrollRef);
-  const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
 
@@ -234,6 +244,7 @@ export function AppSidebar({
   const [collapsedGroups, setCollapsedGroups] = React.useState<
     Record<CollapsibleSidebarGroup, boolean>
   >({
+    starred: false,
     channels: false,
     forums: false,
     directMessages: false,
@@ -297,6 +308,7 @@ export function AppSidebar({
     const sectionIds = new Set(channelSections.map((s) => s.id));
 
     for (const channel of streamChannels) {
+      if (starredChannelIds?.has(channel.id)) continue;
       const sectionId = channelAssignments[channel.id];
       if (sectionId && sectionIds.has(sectionId)) {
         if (!bySection[sectionId]) {
@@ -308,7 +320,14 @@ export function AppSidebar({
       }
     }
     return { bySection, unassigned };
-  }, [streamChannels, channelSections, channelAssignments]);
+  }, [streamChannels, channelSections, channelAssignments, starredChannelIds]);
+
+  const starredChannels = React.useMemo(() => {
+    if (!starredChannelIds || starredChannelIds.size === 0) return [];
+    return streamChannels.filter((channel) =>
+      starredChannelIds.has(channel.id),
+    );
+  }, [streamChannels, starredChannelIds]);
 
   const handleCreateSectionForChannel = React.useCallback(
     (channelId: string) => {
@@ -521,6 +540,37 @@ export function AppSidebar({
 
           {!isLoading ? (
             <>
+              {starredChannels.length > 0 ? (
+                <ChannelGroupSection
+                  browseAriaLabel="Starred channels"
+                  createAriaLabel="Starred channels"
+                  hasUnread={starredChannels.some((c) =>
+                    unreadChannelIds.has(c.id),
+                  )}
+                  isCollapsed={collapsedGroups.starred}
+                  isActiveChannel={selectedView === "channel"}
+                  items={starredChannels}
+                  listTestId="starred-list"
+                  onMarkAllRead={() => {
+                    for (const channel of starredChannels) {
+                      onMarkChannelRead(channel.id, channel.lastMessageAt);
+                    }
+                  }}
+                  onMarkChannelRead={onMarkChannelRead}
+                  onMarkChannelUnread={onMarkChannelUnread}
+                  onSelectChannel={onSelectChannel}
+                  onToggleCollapsed={() => toggleCollapsedGroup("starred")}
+                  selectedChannelId={selectedChannelId}
+                  title="Starred"
+                  unreadChannelIds={unreadChannelIds}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={onMuteChannel}
+                  onUnmuteChannel={onUnmuteChannel}
+                  starredChannelIds={starredChannelIds}
+                  onStarChannel={onStarChannel}
+                  onUnstarChannel={onUnstarChannel}
+                />
+              ) : null}
               <SidebarDndContext
                 channels={channels}
                 sections={channelSections}
@@ -565,6 +615,12 @@ export function AppSidebar({
                     onDeleteSection={() => setDeleteSectionTarget(section)}
                     onMoveSectionUp={() => moveSectionUp(section.id)}
                     onMoveSectionDown={() => moveSectionDown(section.id)}
+                    mutedChannelIds={mutedChannelIds}
+                    onMuteChannel={onMuteChannel}
+                    onUnmuteChannel={onUnmuteChannel}
+                    starredChannelIds={starredChannelIds}
+                    onStarChannel={onStarChannel}
+                    onUnstarChannel={onUnstarChannel}
                   />
                 ))}
                 <ChannelGroupSection
@@ -595,6 +651,12 @@ export function AppSidebar({
                   onAssignChannel={assignChannel}
                   onUnassignChannel={unassignChannel}
                   onCreateSectionForChannel={handleCreateSectionForChannel}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={onMuteChannel}
+                  onUnmuteChannel={onUnmuteChannel}
+                  starredChannelIds={starredChannelIds}
+                  onStarChannel={onStarChannel}
+                  onUnstarChannel={onUnstarChannel}
                 />
               </SidebarDndContext>
               <ChannelGroupSection
@@ -616,6 +678,9 @@ export function AppSidebar({
                 selectedChannelId={selectedChannelId}
                 title="Forums"
                 unreadChannelIds={unreadChannelIds}
+                mutedChannelIds={mutedChannelIds}
+                onMuteChannel={onMuteChannel}
+                onUnmuteChannel={onUnmuteChannel}
               />
               <SidebarSection
                 action={
@@ -650,6 +715,9 @@ export function AppSidebar({
                 testId="dm-list"
                 title="Direct Messages"
                 unreadChannelIds={unreadChannelIds}
+                mutedChannelIds={mutedChannelIds}
+                onMuteChannel={onMuteChannel}
+                onUnmuteChannel={onUnmuteChannel}
               />
             </>
           ) : null}
@@ -675,83 +743,23 @@ export function AppSidebar({
         <SidebarFooter className="absolute inset-x-0 bottom-0 z-30 bg-sidebar/55 backdrop-blur-xl supports-[backdrop-filter]:bg-sidebar/45 dark:bg-sidebar/45 dark:supports-[backdrop-filter]:bg-sidebar/35">
           <SidebarMenu>
             <SidebarMenuItem>
-              <div
-                className="rounded-xl px-2 py-2 transition-colors hover:bg-sidebar-accent/35 focus-within:bg-sidebar-accent/35 dark:hover:bg-sidebar-accent/25 dark:focus-within:bg-sidebar-accent/25"
-                data-testid="sidebar-profile-card"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="relative shrink-0">
-                    <ProfileAvatar
-                      avatarUrl={profile?.avatarUrl ?? null}
-                      className="h-10 w-10 rounded-2xl text-sm"
-                      iconClassName="h-5 w-5"
-                      label={resolvedDisplayName}
-                      testId="sidebar-profile-avatar"
-                    />
-                    <span
-                      aria-label={getPresenceLabel(selfPresenceStatus)}
-                      className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-sidebar"
-                      data-testid="self-presence-badge"
-                      role="img"
-                    >
-                      <PresenceDot
-                        className="h-2.5 w-2.5"
-                        status={selfPresenceStatus}
-                      />
-                    </span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <ProfilePopover
-                      open={profilePopoverOpen}
-                      onOpenChange={setProfilePopoverOpen}
-                      displayName={resolvedDisplayName}
-                      nip05={profile?.nip05Handle}
-                      avatarUrl={profile?.avatarUrl ?? null}
-                      currentStatus={selfPresenceStatus}
-                      isStatusPending={isPresencePending}
-                      userStatusText={selfUserStatus?.text}
-                      userStatusEmoji={selfUserStatus?.emoji}
-                      onSetStatus={onSetPresenceStatus ?? (() => {})}
-                      onSetUserStatus={onSetUserStatus}
-                      onClearUserStatus={onClearUserStatus}
-                      onOpenSettings={onSelectSettings}
-                    >
-                      <button
-                        className="block w-full min-w-0 text-left text-sidebar-foreground"
-                        data-testid="open-settings"
-                        type="button"
-                      >
-                        <p
-                          className="truncate text-sm font-semibold text-current"
-                          data-testid="sidebar-profile-name"
-                        >
-                          {resolvedDisplayName}
-                        </p>
-                      </button>
-                    </ProfilePopover>
-                    <WorkspaceSwitcher
-                      activeWorkspace={activeWorkspace}
-                      onAddWorkspace={onOpenAddWorkspace}
-                      onRemoveWorkspace={onRemoveWorkspace}
-                      onSwitchWorkspace={onSwitchWorkspace}
-                      onUpdateWorkspace={onUpdateWorkspace}
-                      variant="profile"
-                      workspaces={workspaces}
-                    />
-                    {selfUserStatus?.text || selfUserStatus?.emoji ? (
-                      <p className="mt-0.5 truncate text-xs text-sidebar-foreground/50">
-                        {selfUserStatus.emoji ? (
-                          <StatusEmoji
-                            className="mr-1 h-3.5 w-3.5"
-                            value={selfUserStatus.emoji}
-                          />
-                        ) : null}
-                        {selfUserStatus.text}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
+              <SidebarProfileCard
+                activeWorkspace={activeWorkspace}
+                isPresencePending={isPresencePending}
+                onOpenAddWorkspace={onOpenAddWorkspace}
+                onOpenSettings={onSelectSettings}
+                onRemoveWorkspace={onRemoveWorkspace}
+                onSetPresenceStatus={onSetPresenceStatus}
+                onSetUserStatus={onSetUserStatus}
+                onClearUserStatus={onClearUserStatus}
+                onSwitchWorkspace={onSwitchWorkspace}
+                onUpdateWorkspace={onUpdateWorkspace}
+                profile={profile}
+                resolvedDisplayName={resolvedDisplayName}
+                selfPresenceStatus={selfPresenceStatus}
+                selfUserStatus={selfUserStatus}
+                workspaces={workspaces}
+              />
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>

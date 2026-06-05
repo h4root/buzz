@@ -28,7 +28,6 @@ const NESTED_REPLY_OFFSET_PX = 28;
 
 export const MessageRow = React.memo(
   function MessageRow({
-    activeReplyTargetId = null,
     channelId = null,
     highlighted = false,
     isFollowingThread,
@@ -44,7 +43,6 @@ export const MessageRow = React.memo(
     profiles,
     searchQuery,
   }: {
-    activeReplyTargetId?: string | null;
     channelId?: string | null;
     highlighted?: boolean;
     isFollowingThread?: boolean;
@@ -212,7 +210,6 @@ export const MessageRow = React.memo(
     const actionBarNode = (
       <div className="absolute right-2 top-1 z-10">
         <MessageActionBar
-          activeReplyTargetId={activeReplyTargetId}
           channelId={channelId}
           isFollowingThread={isFollowingThread}
           message={message}
@@ -319,6 +316,8 @@ export const MessageRow = React.memo(
           className={cn(
             "group/message relative rounded-2xl px-2 py-1 transition-colors",
             "flex items-start gap-2.5",
+            isThreadReplyLayout &&
+              "hover:ring-1 hover:ring-border/70 focus-within:ring-1 focus-within:ring-border/70",
             highlighted
               ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
               : "",
@@ -451,7 +450,6 @@ export const MessageRow = React.memo(
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
-    prev.activeReplyTargetId === next.activeReplyTargetId &&
     prev.isFollowingThread === next.isFollowingThread &&
     prev.layoutVariant === next.layoutVariant &&
     prev.profiles === next.profiles &&

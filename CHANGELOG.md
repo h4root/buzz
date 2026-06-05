@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.3.11
+
+269b35e8de7 fix(mobile+desktop): cross-device read state sync + diagnostic logging (#843)
+3ddfe5fcc25 feat(mobile): star channels (Slack-style favorites) (#863)
+36d7dbd7cae feat: desktop-screenshot skill to stop agents uploading relay media to PRs (#862)
+c10b4f8f5c6 feat(desktop): star channels (Slack-style favorites) (#860)
+f748f71268e fix(desktop): handle symlinked persona pack directories (#859)
+1fe7bf28725 feat: channel muting for desktop and mobile (#838)
+4ead7de4630 feat(acp): default SPROUT_ACP_MEMORY to on (#854)
+759e5cd9235 fix(desktop): eliminate image-hover layout jump in messages (#813)
+
+
+## v0.3.10
+
+34ac3ba1d18 fix(desktop): harden relay mesh connect p-tag (#834)
+b3aefae152e fix(desktop): scroll activity panel to bottom on open (#848)
+a13691b6207 Polish desktop profile menu interactions (#836)
+0d9b8148f86 fix(desktop): outline thread hover targets (#845)
+b3be9ecba70 fix(desktop): keep message actions hover-only (#844)
+db46c425463 fix(desktop): let inbox composer fill available width (#841)
+2a0572c0d8e fix: use immutable commit-SHA URLs in screenshot PR comments (#842)
+3b78dc5690b feat(mobile+desktop): two-tier Slack-style app icon badge (#802)
+0c225f4d7d3 chore: simplify file-size check to a flat 1000-line limit (#839)
+d8b602a3595 fix(desktop): robust emoji picker — unify picker + fix custom emoji in editing, status, reactions (#837)
+06bc67fd342 feat(desktop): reusable screenshot workflow for agents (#826)
+9f0c22a43a6 desktop(mesh-llm): let a serving node route a different model (#833)
+
+
 ## v0.3.9
 
 82ae85f79a9 fix: native arbitrary-file download + image context-menu flash (#830)

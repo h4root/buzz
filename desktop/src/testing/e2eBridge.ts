@@ -55,6 +55,7 @@ type E2eConfig = {
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
     // (e.g. a generic PDF) without a real upload pipeline. See
     // tests/helpers/bridge.ts:MockBridgeOptions.uploadDescriptors.
+    meshReporterPubkey?: string;
     uploadDescriptors?: RawBlobDescriptor[];
   };
   relayHttpUrl?: string;
@@ -514,12 +515,23 @@ declare global {
       payload?: Record<string, unknown>,
     ) => Promise<unknown>;
     __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
+    __SPROUT_E2E_SIGNED_EVENTS__?: Array<{
+      content: string;
+      kind: number;
+      tags: string[][];
+    }>;
     __SPROUT_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
     __SPROUT_E2E_SET_MESH__?: (mesh: {
       admitted?: boolean;
       models?: Array<{ id: string; name: string | null }>;
       denyReason?: string;
     }) => void;
+    __SPROUT_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+      clientId: string;
+      contexts: Record<string, number>;
+      createdAt: number;
+      slotId: string;
+    }) => unknown;
   }
 }
 
@@ -4257,10 +4269,27 @@ function getMockManagedAgent(pubkey: string): MockManagedAgent {
   return agent;
 }
 
+function isRelayMeshManagedAgent(agent: MockManagedAgent): boolean {
+  const env = agent.env_vars ?? {};
+  return (
+    agent.backend.type === "local" &&
+    env.SPROUT_AGENT_PROVIDER === "openai" &&
+    env.OPENAI_COMPAT_BASE_URL?.replace(/\/+$/, "") ===
+      "http://127.0.0.1:9337/v1" &&
+    env.OPENAI_COMPAT_API_KEY === "sprout-mesh-local"
+  );
+}
+
 async function handleStartManagedAgent(args: {
   pubkey: string;
 }): Promise<RawManagedAgent> {
   const agent = getMockManagedAgent(args.pubkey);
+  if (isRelayMeshManagedAgent(agent)) {
+    throw new Error(
+      "relay mesh agents cannot be started from saved state because the selected serve target is not persisted. Create a new agent with Run on relay mesh selected to refresh the target for http://127.0.0.1:9337/v1.",
+    );
+  }
+
   const now = new Date().toISOString();
   agent.status = "running";
   agent.pid = agent.pid ?? 42000 + mockManagedAgents.indexOf(agent);
@@ -5059,6 +5088,23 @@ function sendToMockSocket(args: {
     // desktop mesh flow (publishMeshConnectRequest) can proceed. We do not model
     // the paired 24622 here; that belongs in a dedicated call-me-now test.
     if (event.kind === 24620 || event.kind === 24621) {
+      if (
+        event.kind === 24621 &&
+        !event.tags.some((tag) => tag[0] === "p" && typeof tag[1] === "string")
+      ) {
+        sendWsText(socket.handler, [
+          "OK",
+          event.id,
+          false,
+          "invalid: mesh connect request missing #p target",
+        ]);
+        return;
+      }
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
+    if (event.kind === 30078) {
       sendWsText(socket.handler, ["OK", event.id, true, ""]);
       return;
     }
@@ -5109,6 +5155,7 @@ export function maybeInstallE2eTauriMocks() {
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
+  window.__SPROUT_E2E_SIGNED_EVENTS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
@@ -5165,6 +5212,30 @@ export function maybeInstallE2eTauriMocks() {
     window.dispatchEvent(new CustomEvent("sprout:e2e-home-feed-updated"));
     return item;
   };
+  window.__SPROUT_E2E_EMIT_MOCK_READ_STATE__ = ({
+    clientId,
+    contexts,
+    createdAt,
+    slotId,
+  }) => {
+    const blob = JSON.stringify({
+      v: 1,
+      client_id: clientId,
+      contexts,
+    });
+    const event = createMockEvent(
+      30078,
+      blob,
+      [
+        ["d", `read-state:${slotId}`],
+        ["t", "read-state"],
+      ],
+      getMockMemberPubkey(config),
+      createdAt,
+    );
+    emitMockLiveEvent(GLOBAL_MOCK_SUBSCRIPTION, event);
+    return event;
+  };
   window.__SPROUT_E2E_SET_STALL_WEBSOCKET_SENDS__ = (stall) => {
     const config = getConfig();
     if (!config?.mock) return;
@@ -5215,7 +5286,10 @@ export function maybeInstallE2eTauriMocks() {
             endpointAddr: "mock-endpoint-addr",
             nodeName: "Mock desktop",
             capacity: { vramGb: null },
-            reporterPubkey: identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
+            reporterPubkey:
+              activeConfig?.mock?.meshReporterPubkey ??
+              identity?.pubkey ??
+              DEFAULT_MOCK_IDENTITY.pubkey,
             endpointId: "mock-endpoint-id",
             deviceId: "mock-endpoint-id",
             deviceName: "Mock desktop",
@@ -5276,6 +5350,8 @@ export function maybeInstallE2eTauriMocks() {
             SPROUT_AGENT_PROVIDER: "openai",
             OPENAI_COMPAT_BASE_URL: "http://127.0.0.1:9337/v1",
             OPENAI_COMPAT_MODEL: model,
+            OPENAI_COMPAT_API_KEY: "sprout-mesh-local",
+            OPENAI_COMPAT_API: "chat",
           },
         };
       }
@@ -5586,6 +5662,11 @@ export function maybeInstallE2eTauriMocks() {
           activeConfig,
         );
       case "sign_event":
+        window.__SPROUT_E2E_SIGNED_EVENTS__?.push({
+          content: (payload as { content: string }).content,
+          kind: (payload as { kind: number }).kind,
+          tags: (payload as { tags: string[][] }).tags,
+        });
         if (identity) {
           return JSON.stringify(
             await signWithIdentity(identity, {
@@ -5606,6 +5687,10 @@ export function maybeInstallE2eTauriMocks() {
             (payload as { createdAt?: number }).createdAt,
           ),
         );
+      case "nip44_encrypt_to_self":
+        return (payload as { plaintext: string }).plaintext;
+      case "nip44_decrypt_from_self":
+        return (payload as { ciphertext: string }).ciphertext;
       case "create_auth_event":
         if (identity) {
           return JSON.stringify(
