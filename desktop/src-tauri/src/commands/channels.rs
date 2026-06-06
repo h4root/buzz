@@ -16,6 +16,59 @@ use crate::{
 // the current list, add/remove the pubkey, and re-publish the whole event.
 // See docs/SPROUT_LITE_MODE.md.
 
+/// Resolve an addressable/replaceable event to its single authoritative copy.
+///
+/// kind:39002 (membership) and kind:39000 (metadata) are NIP-01 addressable
+/// events: exactly one *logical* event exists per `(kind, author, d-tag)`, and
+/// re-publishing supersedes the prior version. In a multi-relay world, however,
+/// relays can disagree — a write may land on relays A and B but be dropped
+/// (rate-limited, offline) by relay C, leaving C with a **stale** older copy.
+/// A query that fans out and merges then sees *both* versions.
+///
+/// The correct resolution per NIP-01 is "latest wins": pick the event with the
+/// greatest `created_at` (tie-break deterministically by event id). Picking an
+/// arbitrary event (e.g. `first()` after a `limit: 1` merge) is a bug — it makes
+/// the member list non-deterministic and, worse, makes read-modify-write
+/// membership updates clobber members that only exist in the newer copy.
+///
+/// Returns `None` for an empty slice.
+fn latest_event(events: &[nostr::Event]) -> Option<&nostr::Event> {
+    events.iter().max_by(|a, b| {
+        a.created_at
+            .as_secs()
+            .cmp(&b.created_at.as_secs())
+            // Deterministic tie-break when two copies share a timestamp.
+            .then_with(|| a.id.to_hex().cmp(&b.id.to_hex()))
+    })
+}
+
+/// Group a batch of addressable events by `d`-tag and keep only the latest copy
+/// of each (see [`latest_event`] for why "latest" not "arbitrary"). Events
+/// without a `d` tag are skipped.
+fn latest_by_d_tag(events: &[nostr::Event]) -> std::collections::HashMap<String, &nostr::Event> {
+    let mut by_d: std::collections::HashMap<String, &nostr::Event> =
+        std::collections::HashMap::new();
+    for ev in events {
+        let Some(d) = ev.tags.iter().find_map(|t| {
+            let s = t.as_slice();
+            (s.len() >= 2 && s[0] == "d").then(|| s[1].clone())
+        }) else {
+            continue;
+        };
+        by_d.entry(d)
+            .and_modify(|cur| {
+                let newer = ev.created_at.as_secs() > cur.created_at.as_secs()
+                    || (ev.created_at.as_secs() == cur.created_at.as_secs()
+                        && ev.id.to_hex() > cur.id.to_hex());
+                if newer {
+                    *cur = ev;
+                }
+            })
+            .or_insert(ev);
+    }
+    by_d
+}
+
 /// Fetch the current members `(pubkey, role)` for a serverless channel from its
 /// kind:39002 event. Role is the 4th element of the `p` tag (NIP-29), defaulting
 /// to `member`. Returns an empty list if no members event exists yet.
@@ -23,17 +76,20 @@ async fn serverless_current_members(
     state: &AppState,
     channel_id: &str,
 ) -> Result<Vec<(String, String)>, String> {
+    // No `limit: 1`: relays can hold divergent copies of this replaceable
+    // event (a write dropped by one relay leaves it stale). Fetch all copies
+    // and resolve to the latest by `created_at` — otherwise a read-modify-write
+    // membership update can be based on a stale list and silently drop members.
     let events = query_relay(
         state,
         &[serde_json::json!({
             "kinds": [39002],
             "#d": [channel_id],
-            "limit": 1
         })],
     )
     .await?;
 
-    let Some(ev) = events.first() else {
+    let Some(ev) = latest_event(&events) else {
         return Ok(Vec::new());
     };
     let members = ev
@@ -135,23 +191,28 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
     channel_ids.dedup();
 
     // Step 2: fetch channel metadata events (kind:39000) for member channels.
-    // kind:39000 is addressable: exactly one event per `d` tag, so a limit
-    // equal to the number of ids is both necessary and sufficient. Without
-    // an explicit limit, multi-value `#d` filters fall through to the relay's
-    // default LIMIT and can drop results when there are many channels.
-    let meta_events = if !channel_ids.is_empty() {
+    // kind:39000 is addressable: one logical event per `d` tag. We do NOT cap
+    // the limit at `channel_ids.len()`: across multiple relays each channel can
+    // return several copies (fresh + stale), so a tight limit can truncate and
+    // drop the fresh copy of one channel while keeping a stale copy of another.
+    // Over-fetch, then resolve to the latest copy per `d` tag below.
+    let meta_events_raw = if !channel_ids.is_empty() {
         query_relay(
             &state,
             &[serde_json::json!({
                 "kinds": [39000],
                 "#d": channel_ids,
-                "limit": channel_ids.len(),
             })],
         )
         .await?
     } else {
         Vec::new()
     };
+    // Deduplicate to the latest copy per channel (relays may disagree).
+    let meta_events: Vec<nostr::Event> = latest_by_d_tag(&meta_events_raw)
+        .into_values()
+        .cloned()
+        .collect();
 
     // Step 3: fetch open channel metadata so the channel browser can show
     // discoverable channels the user hasn't joined yet. The relay's access
@@ -259,15 +320,13 @@ struct ChannelMembership {
 fn collect_members_by_channel(
     events: &[nostr::Event],
 ) -> std::collections::HashMap<String, ChannelMembership> {
+    // Resolve each channel's `d`-tag to its latest 39002 across relays first;
+    // a naive per-event insert would let a stale copy overwrite the fresh one
+    // depending on iteration order.
+    let latest = latest_by_d_tag(events);
     let mut map: std::collections::HashMap<String, ChannelMembership> =
-        std::collections::HashMap::with_capacity(events.len());
-    for ev in events {
-        let Some(d) = ev.tags.iter().find_map(|t| {
-            let s = t.as_slice();
-            (s.len() >= 2 && s[0] == "d").then(|| s[1].clone())
-        }) else {
-            continue;
-        };
+        std::collections::HashMap::with_capacity(latest.len());
+    for (d, ev) in latest {
         let Ok(resp) = nostr_convert::channel_members_from_event(ev) else {
             continue;
         };
@@ -288,18 +347,17 @@ pub async fn get_channel_details(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelDetailInfo, String> {
+    // Resolve the latest copy across relays (kind:39000 is replaceable too).
     let events = query_relay(
         &state,
         &[serde_json::json!({
             "kinds": [39000],
             "#d": [channel_id],
-            "limit": 1
         })],
     )
     .await?;
 
-    events
-        .first()
+    latest_event(&events)
         .map(nostr_convert::channel_detail_from_event)
         .transpose()?
         .ok_or_else(|| "channel not found".to_string())
@@ -310,18 +368,19 @@ pub async fn get_channel_members(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelMembersResponse, String> {
+    // Fetch all copies and resolve the latest (relays may disagree); see
+    // `latest_event`. A stale `limit: 1` pick would hide members added by a
+    // write that one relay dropped.
     let events = query_relay(
         &state,
         &[serde_json::json!({
             "kinds": [39002],
             "#d": [channel_id],
-            "limit": 1
         })],
     )
     .await?;
 
-    let mut response = events
-        .first()
+    let mut response = latest_event(&events)
         .map(nostr_convert::channel_members_from_event)
         .transpose()?
         .ok_or_else(|| "channel members not found".to_string())?;

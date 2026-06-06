@@ -81,6 +81,55 @@ async fn publish_presence(
     Ok(())
 }
 
+/// Publish the agent's NIP-01 kind:0 profile metadata so clients render a name
+/// and avatar instead of the raw hex pubkey.
+///
+/// Without this, an agent only ever announces presence (kind:20001) and never
+/// tells the network who it is, so every client shows it as `2b5f20…`. We
+/// publish on startup (and it is replaceable, so re-publishing on each launch
+/// keeps name/avatar current). `name` is required; `about`/`picture` are
+/// included only when present.
+async fn publish_profile(
+    publisher: &relay::RelayEventPublisher,
+    keys: &nostr::Keys,
+    name: &str,
+    about: Option<&str>,
+    picture: Option<&str>,
+) -> Result<(), relay::RelayError> {
+    use nostr::{EventBuilder, Kind};
+
+    let content = build_profile_metadata_json(name, about, picture);
+    let event = EventBuilder::new(Kind::Metadata, content)
+        .tags([])
+        .sign_with_keys(keys)
+        .map_err(|e| relay::RelayError::Http(format!("profile sign error: {e}")))?;
+    publisher.publish_event(event).await?;
+    Ok(())
+}
+
+/// Build the NIP-01 kind:0 metadata JSON content for an agent profile.
+///
+/// Sets both `name` and `display_name` (clients read either), and includes
+/// `about`/`picture` only when non-empty.
+fn build_profile_metadata_json(name: &str, about: Option<&str>, picture: Option<&str>) -> String {
+    let mut meta = serde_json::Map::new();
+    meta.insert("name".into(), serde_json::Value::String(name.to_string()));
+    meta.insert(
+        "display_name".into(),
+        serde_json::Value::String(name.to_string()),
+    );
+    if let Some(about) = about.filter(|s| !s.trim().is_empty()) {
+        meta.insert("about".into(), serde_json::Value::String(about.to_string()));
+    }
+    if let Some(picture) = picture.filter(|s| !s.trim().is_empty()) {
+        meta.insert(
+            "picture".into(),
+            serde_json::Value::String(picture.to_string()),
+        );
+    }
+    serde_json::Value::Object(meta).to_string()
+}
+
 // ── Owner resolution ──────────────────────────────────────────────────────────
 
 /// Resolve the agent's owner pubkey at startup.
@@ -946,6 +995,26 @@ async fn tokio_main() -> Result<()> {
             Ok(_) => tracing::info!("presence set to online"),
             Err(e) => tracing::warn!("failed to set initial presence: {e}"),
         }
+    }
+
+    // ── Step 2c.2: Publish agent profile (kind:0) ─────────────────────────────
+    // So clients show the agent's name/avatar instead of a raw hex pubkey.
+    // Only when a persona supplied a name (no persona → no profile to publish).
+    if let Some(name) = config.profile_name.as_deref() {
+        match publish_profile(
+            &presence_publisher,
+            &presence_keys,
+            name,
+            config.profile_about.as_deref(),
+            config.profile_picture.as_deref(),
+        )
+        .await
+        {
+            Ok(_) => tracing::info!("published agent profile (name={name})"),
+            Err(e) => tracing::warn!("failed to publish agent profile: {e}"),
+        }
+    } else {
+        tracing::debug!("no persona display name; skipping kind:0 profile publish");
     }
 
     // ── Step 2d: Resolve agent owner ────────────────────────────────────────
@@ -2736,6 +2805,43 @@ mod owner_cache_tests {
 }
 
 #[cfg(test)]
+mod profile_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn includes_name_and_display_name() {
+        let json = build_profile_metadata_json("Goose", None, None);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(v["name"], "Goose");
+        assert_eq!(v["display_name"], "Goose");
+        // about/picture omitted when not supplied.
+        assert!(v.get("about").is_none());
+        assert!(v.get("picture").is_none());
+    }
+
+    #[test]
+    fn includes_about_and_picture_when_present() {
+        let json = build_profile_metadata_json(
+            "Sami",
+            Some("A helpful agent"),
+            Some("https://example.com/a.png"),
+        );
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(v["name"], "Sami");
+        assert_eq!(v["about"], "A helpful agent");
+        assert_eq!(v["picture"], "https://example.com/a.png");
+    }
+
+    #[test]
+    fn omits_blank_about_and_picture() {
+        let json = build_profile_metadata_json("Goose", Some("   "), Some(""));
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert!(v.get("about").is_none(), "blank about must be omitted");
+        assert!(v.get("picture").is_none(), "blank picture must be omitted");
+    }
+}
+
+#[cfg(test)]
 mod observer_chunk_coalescer_tests {
     use super::*;
 
@@ -2872,6 +2978,9 @@ mod build_mcp_servers_tests {
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: std::collections::HashSet::new(),
             persona_env_vars: vec![],
+            profile_name: None,
+            profile_about: None,
+            profile_picture: None,
             relay_observer: false,
             agent_owner: None,
             no_base_prompt: false,

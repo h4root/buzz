@@ -2,7 +2,7 @@
 // channels.rs under the per-file line cap.
 
 use super::*;
-use nostr::{EventBuilder, Keys, Kind, Tag};
+use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
 
 /// Build a signed event for testing with the given kind, content, and tags.
 fn ev(kind: u16, content: &str, tags: Vec<Vec<&str>>) -> nostr::Event {
@@ -14,6 +14,22 @@ fn ev(kind: u16, content: &str, tags: Vec<Vec<&str>>) -> nostr::Event {
     EventBuilder::new(Kind::from_u16(kind), content)
         .tags(parsed)
         .sign_with_keys(&keys)
+        .expect("sign")
+}
+
+/// Like [`ev`] but with an explicit `created_at` and a caller-supplied signing
+/// key — so a test can produce multiple versions of the *same* addressable
+/// event (same author + d-tag) with different timestamps to exercise
+/// "latest wins" resolution.
+fn ev_at(keys: &Keys, kind: u16, created_at: u64, tags: Vec<Vec<&str>>) -> nostr::Event {
+    let parsed: Vec<Tag> = tags
+        .into_iter()
+        .map(|t| Tag::parse(t).expect("parse tag"))
+        .collect();
+    EventBuilder::new(Kind::from_u16(kind), "")
+        .tags(parsed)
+        .custom_created_at(Timestamp::from(created_at))
+        .sign_with_keys(keys)
         .expect("sign")
 }
 
@@ -495,4 +511,178 @@ async fn serverless_live_subscription_multi_relay() {
     eprintln!("✅ live subscription delivered the message across relays — no split-brain");
 
     state.relay_pool.unsubscribe(&sub_id).await;
+}
+
+// ── Replaceable-event "latest wins" resolution ───────────────────────────────
+//
+// Regression coverage for the multi-relay membership bug: when relays hold
+// divergent copies of a replaceable kind:39002 (one relay dropped a write and
+// kept a stale copy), the client must resolve to the LATEST copy by
+// `created_at`. Picking an arbitrary copy made the member list flicker and made
+// read-modify-write membership updates silently clobber members.
+
+const PK_BOT: &str = "2b5f20697e34f75726f567dcc6657b7ca4a10afc5d341ec50f34d91fd3014874";
+
+#[test]
+fn latest_event_picks_newest_by_created_at() {
+    let keys = Keys::generate();
+    // Stale copy: 2 members. Fresh copy: 3 members (bot added later).
+    let stale = ev_at(
+        &keys,
+        39002,
+        1000,
+        vec![
+            vec!["d", "chan"],
+            vec!["p", PK_A, "", "member"],
+            vec!["p", PK_B, "", "member"],
+        ],
+    );
+    let fresh = ev_at(
+        &keys,
+        39002,
+        2000,
+        vec![
+            vec!["d", "chan"],
+            vec!["p", PK_A, "", "member"],
+            vec!["p", PK_B, "", "member"],
+            vec!["p", PK_BOT, "", "member"],
+        ],
+    );
+
+    // Whatever order relays return them in, the newest must win.
+    for events in [
+        vec![stale.clone(), fresh.clone()],
+        vec![fresh.clone(), stale.clone()],
+    ] {
+        let chosen = latest_event(&events).expect("some event");
+        assert_eq!(
+            chosen.id, fresh.id,
+            "must pick the newest copy regardless of input order"
+        );
+        let resp = nostr_convert::channel_members_from_event(chosen).expect("parse members");
+        let pks: Vec<&str> = resp.members.iter().map(|m| m.pubkey.as_str()).collect();
+        assert!(
+            pks.contains(&PK_BOT),
+            "bot added in the newer copy must be present, got {pks:?}"
+        );
+        assert_eq!(resp.members.len(), 3);
+    }
+}
+
+#[test]
+fn latest_event_empty_is_none() {
+    assert!(latest_event(&[]).is_none());
+}
+
+#[test]
+fn latest_event_tie_break_is_deterministic() {
+    // Two copies with the SAME created_at must resolve deterministically
+    // (highest event id), not by chance/order.
+    let k1 = Keys::generate();
+    let k2 = Keys::generate();
+    let a = ev_at(
+        &k1,
+        39002,
+        5000,
+        vec![vec!["d", "chan"], vec!["p", PK_A, "", "member"]],
+    );
+    let b = ev_at(
+        &k2,
+        39002,
+        5000,
+        vec![vec!["d", "chan"], vec!["p", PK_B, "", "member"]],
+    );
+    let expected = if a.id.to_hex() > b.id.to_hex() {
+        a.id
+    } else {
+        b.id
+    };
+    assert_eq!(latest_event(&[a.clone(), b.clone()]).unwrap().id, expected);
+    assert_eq!(latest_event(&[b, a]).unwrap().id, expected);
+}
+
+#[test]
+fn latest_by_d_tag_resolves_each_channel_independently() {
+    let k = Keys::generate();
+    // chan-1: stale (1 member) + fresh (2 members). chan-2: single copy.
+    let c1_stale = ev_at(
+        &k,
+        39002,
+        1000,
+        vec![vec!["d", "chan-1"], vec!["p", PK_A, "", "member"]],
+    );
+    let c1_fresh = ev_at(
+        &k,
+        39002,
+        2000,
+        vec![
+            vec!["d", "chan-1"],
+            vec!["p", PK_A, "", "member"],
+            vec!["p", PK_BOT, "", "member"],
+        ],
+    );
+    let c2 = ev_at(
+        &k,
+        39002,
+        1500,
+        vec![vec!["d", "chan-2"], vec!["p", PK_C, "", "member"]],
+    );
+
+    let events = [c1_stale, c2.clone(), c1_fresh.clone()];
+    let map = latest_by_d_tag(&events);
+    assert_eq!(map.len(), 2);
+    assert_eq!(
+        map.get("chan-1").unwrap().id,
+        c1_fresh.id,
+        "chan-1 must be the fresh copy"
+    );
+    assert_eq!(map.get("chan-2").unwrap().id, c2.id);
+}
+
+#[test]
+fn latest_by_d_tag_skips_events_without_d_tag() {
+    let k = Keys::generate();
+    let no_d = ev_at(&k, 39002, 1000, vec![vec!["p", PK_A, "", "member"]]);
+    let with_d = ev_at(
+        &k,
+        39002,
+        1000,
+        vec![vec!["d", "chan"], vec!["p", PK_B, "", "member"]],
+    );
+    let events = [no_d, with_d.clone()];
+    let map = latest_by_d_tag(&events);
+    assert_eq!(map.len(), 1);
+    assert_eq!(map.get("chan").unwrap().id, with_d.id);
+}
+
+#[test]
+fn collect_members_by_channel_uses_latest_copy() {
+    // The batch path (channel browser member counts) must also resolve to the
+    // latest copy — a stale copy must not undercount members.
+    let k = Keys::generate();
+    let stale = ev_at(
+        &k,
+        39002,
+        1000,
+        vec![vec!["d", "chan-x"], vec!["p", PK_A, "", "member"]],
+    );
+    let fresh = ev_at(
+        &k,
+        39002,
+        2000,
+        vec![
+            vec!["d", "chan-x"],
+            vec!["p", PK_A, "", "member"],
+            vec!["p", PK_BOT, "", "member"],
+        ],
+    );
+    // Stale listed AFTER fresh — naive last-write-wins iteration would have
+    // picked the stale one; latest_by_d_tag must still choose fresh.
+    let map = collect_members_by_channel(&[fresh, stale]);
+    let info = map.get("chan-x").expect("channel present");
+    assert_eq!(
+        info.count, 2,
+        "must count the fresh 2-member copy, not stale 1-member"
+    );
+    assert!(info.pubkeys.iter().any(|p| p == PK_BOT));
 }

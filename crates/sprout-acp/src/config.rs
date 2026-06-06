@@ -478,6 +478,13 @@ pub struct Config {
     /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL).
     /// Populated from persona pack resolution. Empty when no pack is configured.
     pub persona_env_vars: Vec<(String, String)>,
+    /// Agent profile (NIP-01 kind:0 metadata) published at startup so clients
+    /// render a name/avatar instead of raw hex pubkey. Sourced from the resolved
+    /// persona (`display_name`, `description`, `avatar`); `None` when no persona
+    /// pack is configured, in which case no profile is published.
+    pub profile_name: Option<String>,
+    pub profile_about: Option<String>,
+    pub profile_picture: Option<String>,
     /// Whether to publish encrypted observer frames through the relay.
     pub relay_observer: bool,
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
@@ -580,6 +587,27 @@ pub fn propagate_legacy_env_vars() {
             }
         }
     }
+}
+
+/// Derive a fallback agent profile name from the agent command, so an agent
+/// launched without a persona still publishes a readable kind:0 name instead of
+/// a bare hex pubkey. Strips any path/extension and title-cases the first
+/// letter: `"goose"` → `"Goose"`, `"/usr/bin/claude"` → `"Claude"`. Returns
+/// `None` only for an empty/whitespace command.
+fn default_profile_name_from_command(agent_command: &str) -> Option<String> {
+    let base = std::path::Path::new(agent_command)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(agent_command)
+        .trim();
+    if base.is_empty() {
+        return None;
+    }
+    let mut chars = base.chars();
+    Some(match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => base.to_string(),
+    })
 }
 
 impl Config {
@@ -751,43 +779,61 @@ impl Config {
         //
         // Precedence: CLI/env args > persona values > built-in defaults.
         // Persona fills in what's missing. Explicit flags always win.
-        let (persona_system_prompt, persona_model, persona_env_vars) =
-            match (&args.persona_pack, &args.persona_name) {
-                (Some(pack_dir), Some(name)) => {
-                    let pack = sprout_persona::resolve::resolve_pack(pack_dir).map_err(|e| {
+        #[allow(clippy::type_complexity)]
+        let (
+            persona_system_prompt,
+            persona_model,
+            persona_env_vars,
+            persona_display_name,
+            persona_about,
+            persona_avatar,
+        ) = match (&args.persona_pack, &args.persona_name) {
+            (Some(pack_dir), Some(name)) => {
+                let pack = sprout_persona::resolve::resolve_pack(pack_dir).map_err(|e| {
+                    ConfigError::ConfigFile(format!(
+                        "failed to resolve pack {}: {e}",
+                        pack_dir.display()
+                    ))
+                })?;
+                let persona = pack
+                    .personas
+                    .into_iter()
+                    .find(|p| p.name == *name)
+                    .ok_or_else(|| {
                         ConfigError::ConfigFile(format!(
-                            "failed to resolve pack {}: {e}",
+                            "persona '{name}' not found in pack {}",
                             pack_dir.display()
                         ))
                     })?;
-                    let persona = pack
-                        .personas
-                        .into_iter()
-                        .find(|p| p.name == *name)
-                        .ok_or_else(|| {
-                            ConfigError::ConfigFile(format!(
-                                "persona '{name}' not found in pack {}",
-                                pack_dir.display()
-                            ))
-                        })?;
-                    (
-                        Some(persona.system_prompt),
-                        persona.model,
-                        persona.goose_env_vars,
-                    )
-                }
-                (Some(_), None) => {
-                    return Err(ConfigError::ConfigFile(
-                        "--persona-pack requires --persona-name".into(),
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(ConfigError::ConfigFile(
-                        "--persona-name requires --persona-pack".into(),
-                    ));
-                }
-                (None, None) => (None, None, vec![]),
-            };
+                // Profile name: prefer the human display_name, fall back to slug.
+                let display_name = if persona.display_name.trim().is_empty() {
+                    persona.name.clone()
+                } else {
+                    persona.display_name.clone()
+                };
+                let about =
+                    (!persona.description.trim().is_empty()).then(|| persona.description.clone());
+                (
+                    Some(persona.system_prompt),
+                    persona.model,
+                    persona.goose_env_vars,
+                    Some(display_name),
+                    about,
+                    persona.avatar,
+                )
+            }
+            (Some(_), None) => {
+                return Err(ConfigError::ConfigFile(
+                    "--persona-pack requires --persona-name".into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(ConfigError::ConfigFile(
+                    "--persona-name requires --persona-pack".into(),
+                ));
+            }
+            (None, None) => (None, None, vec![], None, None, None),
+        };
 
         // Apply persona defaults: CLI/env wins, persona fills gaps.
         if system_prompt.is_none() {
@@ -817,6 +863,13 @@ impl Config {
         // in server mode against public relays → "No auth challenge received"
         // and an HTTP-bridge channel-discovery crash.
         let serverless = args.serverless || args.relay_url.contains(',');
+
+        // Agent profile name: persona display_name if set, else a title-cased
+        // fallback derived from the agent command (e.g. "goose" → "Goose") so a
+        // bare agent still publishes a kind:0 profile and shows a name rather
+        // than a raw hex pubkey in clients.
+        let profile_name =
+            persona_display_name.or_else(|| default_profile_name_from_command(&agent_command));
 
         let config = Config {
             keys,
@@ -850,6 +903,9 @@ impl Config {
             respond_to: args.respond_to,
             respond_to_allowlist,
             persona_env_vars,
+            profile_name,
+            profile_about: persona_about,
+            profile_picture: persona_avatar,
             relay_observer: args.relay_observer,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
             no_base_prompt: args.no_base_prompt,
@@ -1217,6 +1273,9 @@ mod tests {
             respond_to: RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
             persona_env_vars: vec![],
+            profile_name: None,
+            profile_about: None,
+            profile_picture: None,
             relay_observer: false,
             agent_owner: None,
             no_base_prompt: false,
@@ -1245,6 +1304,32 @@ mod tests {
     }
 
     // ── resolve_channel_filters: Mentions mode ───────────────────────────────
+
+    #[test]
+    fn profile_name_fallback_title_cases_command() {
+        assert_eq!(
+            default_profile_name_from_command("goose"),
+            Some("Goose".to_string())
+        );
+    }
+
+    #[test]
+    fn profile_name_fallback_strips_path_and_extension() {
+        assert_eq!(
+            default_profile_name_from_command("/usr/local/bin/claude"),
+            Some("Claude".to_string())
+        );
+        assert_eq!(
+            default_profile_name_from_command("agent.sh"),
+            Some("Agent".to_string())
+        );
+    }
+
+    #[test]
+    fn profile_name_fallback_empty_is_none() {
+        assert_eq!(default_profile_name_from_command(""), None);
+        assert_eq!(default_profile_name_from_command("   "), None);
+    }
 
     #[test]
     fn test_mentions_mode_default_kinds() {
