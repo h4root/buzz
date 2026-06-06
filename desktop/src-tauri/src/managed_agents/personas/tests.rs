@@ -458,3 +458,317 @@ fn migrate_is_idempotent() {
     // 4. Run again on result of (3) — should be no-op.
     assert!(!migrate_retired_personas(&mut stored_pre_demotion, now));
 }
+
+// ── sync_one_pack ─────────────────────────────────────────────────────────────
+
+use super::{sync_one_pack, sync_packs_from_dir};
+use crate::managed_agents::ManagedAgentRecord;
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
+use tempfile::TempDir;
+
+const NOW: &str = "2026-06-06T00:00:00Z";
+
+/// Minimal ManagedAgentRecord for testing the removal safety gate.
+fn stub_agent(persona_id: &str) -> ManagedAgentRecord {
+    ManagedAgentRecord {
+        pubkey: "deadbeef".to_string(),
+        name: "test-agent".to_string(),
+        persona_id: Some(persona_id.to_string()),
+        private_key_nsec: "nsec1test".to_string(),
+        auth_tag: None,
+        relay_url: "ws://localhost:3000".to_string(),
+        acp_command: "sprout-acp".to_string(),
+        agent_command: "goose".to_string(),
+        agent_args: vec![],
+        mcp_command: "sprout-dev-mcp".to_string(),
+        turn_timeout_seconds: 300,
+        idle_timeout_seconds: None,
+        max_turn_duration_seconds: None,
+        parallelism: 1,
+        system_prompt: None,
+        model: None,
+        mcp_toolsets: None,
+        env_vars: BTreeMap::new(),
+        start_on_app_launch: false,
+        runtime_pid: None,
+        backend: Default::default(),
+        backend_agent_id: None,
+        provider_binary_path: None,
+        persona_pack_path: None,
+        persona_name_in_pack: None,
+        created_at: NOW.to_string(),
+        updated_at: NOW.to_string(),
+        last_started_at: None,
+        last_stopped_at: None,
+        last_exit_code: None,
+        last_error: None,
+        respond_to: Default::default(),
+        respond_to_allowlist: vec![],
+    }
+}
+
+/// Minimal PersonaRecord for a pack persona.
+fn pack_persona(id: &str, slug: &str, pack_id: &str) -> PersonaRecord {
+    PersonaRecord {
+        id: id.to_string(),
+        display_name: format!("Display {slug}"),
+        avatar_url: None,
+        system_prompt: "Original prompt.".to_string(),
+        provider: None,
+        model: None,
+        name_pool: Vec::new(),
+        is_builtin: false,
+        is_active: true,
+        source_pack: Some(pack_id.to_string()),
+        source_pack_persona_slug: Some(slug.to_string()),
+        env_vars: BTreeMap::new(),
+        created_at: NOW.to_string(),
+        updated_at: NOW.to_string(),
+    }
+}
+
+/// Build a minimal valid pack directory with the given personas.
+/// Each persona is `(slug, display_name, system_prompt)`.
+fn make_pack_dir(dir: &TempDir, pack_id: &str, personas: &[(&str, &str, &str)]) -> PathBuf {
+    let root = dir.path().to_path_buf();
+    fs::create_dir_all(root.join(".plugin")).unwrap();
+
+    let persona_paths: Vec<String> = personas
+        .iter()
+        .map(|(slug, _, _)| format!("personas/{slug}.persona.md"))
+        .collect();
+
+    let manifest = serde_json::json!({
+        "id": pack_id,
+        "name": format!("Pack {pack_id}"),
+        "version": "0.1.0",
+        "personas": persona_paths,
+    });
+    fs::write(
+        root.join(".plugin/plugin.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("personas")).unwrap();
+    for (slug, display_name, prompt) in personas {
+        let content = format!(
+            "---\nname: {slug}\ndisplay_name: {display_name}\ndescription: Test persona.\n---\n{prompt}\n"
+        );
+        fs::write(root.join(format!("personas/{slug}.persona.md")), content).unwrap();
+    }
+
+    root
+}
+
+#[test]
+fn sync_one_pack_adds_new_persona() {
+    let dir = TempDir::new().unwrap();
+    let pack_dir = make_pack_dir(&dir, "test-pack", &[("berry", "Berry", "You are Berry.")]);
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_dir).unwrap();
+
+    let mut records: Vec<PersonaRecord> = vec![];
+    let changed = sync_one_pack(&mut records, "test-pack", &resolved, &[], NOW);
+
+    assert!(changed);
+    assert_eq!(records.len(), 1);
+    let r = &records[0];
+    assert_eq!(r.display_name, "Berry");
+    assert!(r.system_prompt.contains("You are Berry."));
+    assert_eq!(r.source_pack.as_deref(), Some("test-pack"));
+    assert_eq!(r.source_pack_persona_slug.as_deref(), Some("berry"));
+    assert!(r.is_active);
+    assert!(!r.is_builtin);
+    // Pack personas never use name_pool.
+    assert!(r.name_pool.is_empty());
+}
+
+#[test]
+fn sync_one_pack_removes_deleted_persona() {
+    let dir = TempDir::new().unwrap();
+    // Pack now has only "pip" — "berry" was removed.
+    let pack_dir = make_pack_dir(&dir, "test-pack", &[("pip", "Pip", "You are Pip.")]);
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_dir).unwrap();
+
+    // Start with both berry and pip in records.
+    let berry = pack_persona("uuid-berry", "berry", "test-pack");
+    let pip = pack_persona("uuid-pip", "pip", "test-pack");
+    let mut records = vec![berry, pip];
+
+    let changed = sync_one_pack(&mut records, "test-pack", &resolved, &[], NOW);
+
+    assert!(changed);
+    // berry should be gone, pip should remain.
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].source_pack_persona_slug.as_deref(), Some("pip"));
+}
+
+#[test]
+fn sync_one_pack_deactivates_instead_of_deleting_when_referenced() {
+    let dir = TempDir::new().unwrap();
+    // Pack now has only "pip" — "berry" was removed.
+    let pack_dir = make_pack_dir(&dir, "test-pack", &[("pip", "Pip", "You are Pip.")]);
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_dir).unwrap();
+
+    let berry = pack_persona("uuid-berry", "berry", "test-pack");
+    let pip = pack_persona("uuid-pip", "pip", "test-pack");
+    let mut records = vec![berry, pip];
+
+    // A managed agent references berry by UUID.
+    let agent = stub_agent("uuid-berry");
+
+    let changed = sync_one_pack(&mut records, "test-pack", &resolved, &[agent], NOW);
+
+    assert!(changed);
+    // berry should still be in records but deactivated.
+    assert_eq!(records.len(), 2);
+    let berry = records.iter().find(|r| r.id == "uuid-berry").unwrap();
+    assert!(!berry.is_active);
+    assert_eq!(berry.updated_at, NOW);
+}
+
+#[test]
+fn sync_one_pack_updates_changed_fields() {
+    let dir = TempDir::new().unwrap();
+    let pack_dir = make_pack_dir(
+        &dir,
+        "test-pack",
+        &[("berry", "Berry Updated", "New prompt.")],
+    );
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_dir).unwrap();
+
+    let mut berry = pack_persona("uuid-berry", "berry", "test-pack");
+    berry.display_name = "Berry Old".to_string();
+    berry.system_prompt = "Old prompt.".to_string();
+    let mut records = vec![berry];
+
+    let changed = sync_one_pack(&mut records, "test-pack", &resolved, &[], NOW);
+
+    assert!(changed);
+    assert_eq!(records[0].display_name, "Berry Updated");
+    assert!(records[0].system_prompt.contains("New prompt."));
+    assert_eq!(records[0].updated_at, NOW);
+}
+
+#[test]
+fn sync_one_pack_no_change_returns_false() {
+    let dir = TempDir::new().unwrap();
+    let pack_dir = make_pack_dir(&dir, "test-pack", &[("berry", "Berry", "You are Berry.")]);
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_dir).unwrap();
+
+    // Add berry via sync first.
+    let mut records: Vec<PersonaRecord> = vec![];
+    sync_one_pack(&mut records, "test-pack", &resolved, &[], NOW);
+
+    // Second call with same resolved pack — nothing should change.
+    let changed = sync_one_pack(&mut records, "test-pack", &resolved, &[], NOW);
+    assert!(!changed);
+    assert_eq!(records.len(), 1);
+}
+
+#[test]
+fn sync_one_pack_does_not_touch_other_packs() {
+    let dir = TempDir::new().unwrap();
+    let pack_dir = make_pack_dir(&dir, "pack-a", &[("berry", "Berry", "You are Berry.")]);
+    let resolved = sprout_persona::resolve::resolve_pack(&pack_dir).unwrap();
+
+    // Record from a different pack — must not be touched.
+    let other = pack_persona("uuid-other", "other-slug", "pack-b");
+    let mut records = vec![other];
+
+    let changed = sync_one_pack(&mut records, "pack-a", &resolved, &[], NOW);
+
+    assert!(changed); // berry was added
+    // pack-b record must still be present and unchanged.
+    assert!(records.iter().any(|r| r.source_pack.as_deref() == Some("pack-b")));
+}
+
+// ── sync_packs_from_dir ───────────────────────────────────────────────────────
+
+#[test]
+fn sync_packs_from_dir_adds_persona_from_symlinked_pack() {
+    let source_dir = TempDir::new().unwrap();
+    let packs_dir = TempDir::new().unwrap();
+
+    make_pack_dir(&source_dir, "my-pack", &[("berry", "Berry", "You are Berry.")]);
+
+    // Symlink source_dir into packs_dir as "my-pack".
+    let link = packs_dir.path().join("my-pack");
+    std::os::unix::fs::symlink(source_dir.path(), &link).unwrap();
+
+    let mut records: Vec<PersonaRecord> = vec![];
+    let changed = sync_packs_from_dir(&mut records, packs_dir.path(), &[], NOW);
+
+    assert!(changed);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].display_name, "Berry");
+    assert_eq!(records[0].source_pack.as_deref(), Some("my-pack"));
+}
+
+#[test]
+fn sync_packs_from_dir_ignores_non_symlinked_packs() {
+    let packs_dir = TempDir::new().unwrap();
+
+    // Create a real (non-symlinked) pack directory directly inside packs_dir.
+    let pack_root = packs_dir.path().join("real-pack");
+    let tmp = TempDir::new().unwrap();
+    make_pack_dir(&tmp, "real-pack", &[("berry", "Berry", "You are Berry.")]);
+    // Copy (not symlink) into packs_dir.
+    fs::create_dir_all(&pack_root).unwrap();
+    for entry in fs::read_dir(tmp.path()).unwrap().flatten() {
+        let dst = pack_root.join(entry.file_name());
+        if entry.path().is_dir() {
+            let _ = std::process::Command::new("cp")
+                .args(["-r", &entry.path().to_string_lossy(), &dst.to_string_lossy()])
+                .status();
+        } else {
+            fs::copy(entry.path(), &dst).unwrap();
+        }
+    }
+
+    let mut records: Vec<PersonaRecord> = vec![];
+    let changed = sync_packs_from_dir(&mut records, packs_dir.path(), &[], NOW);
+
+    // Non-symlinked pack must not be synced.
+    assert!(!changed);
+    assert!(records.is_empty());
+}
+
+#[test]
+fn sync_packs_from_dir_handles_broken_symlink_gracefully() {
+    let packs_dir = TempDir::new().unwrap();
+
+    // Create a symlink pointing to a non-existent target.
+    let link = packs_dir.path().join("broken-pack");
+    std::os::unix::fs::symlink("/nonexistent/path/that/does/not/exist", &link).unwrap();
+
+    let mut records: Vec<PersonaRecord> = vec![];
+    // Must not panic.
+    let changed = sync_packs_from_dir(&mut records, packs_dir.path(), &[], NOW);
+
+    assert!(!changed);
+    assert!(records.is_empty());
+}
+
+#[test]
+fn sync_packs_from_dir_mtime_short_circuit_skips_unchanged_pack() {
+    let source_dir = TempDir::new().unwrap();
+    let packs_dir = TempDir::new().unwrap();
+
+    make_pack_dir(&source_dir, "my-pack", &[("berry", "Berry", "You are Berry.")]);
+    let link = packs_dir.path().join("my-pack");
+    std::os::unix::fs::symlink(source_dir.path(), &link).unwrap();
+
+    // First call — populates mtime cache and adds berry.
+    let mut records: Vec<PersonaRecord> = vec![];
+    let changed = sync_packs_from_dir(&mut records, packs_dir.path(), &[], NOW);
+    assert!(changed);
+    assert_eq!(records.len(), 1);
+
+    // Second call without any filesystem changes — mtime unchanged, should be a no-op.
+    let changed2 = sync_packs_from_dir(&mut records, packs_dir.path(), &[], NOW);
+    assert!(!changed2);
+    assert_eq!(records.len(), 1);
+}

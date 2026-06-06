@@ -1,4 +1,10 @@
-use std::{fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+    time::SystemTime,
+};
 
 use tauri::AppHandle;
 use uuid::Uuid;
@@ -7,6 +13,18 @@ use crate::{
     managed_agents::{managed_agents_base_dir, PersonaRecord},
     util::now_iso,
 };
+
+/// Per-pack mtime cache for the symlink sync short-circuit.
+///
+/// Keyed by pack ID. Stores the last-seen mtime of the symlink target
+/// directory. If the mtime is unchanged since the last sync, `resolve_pack()`
+/// is skipped — the common "nothing changed" case pays only one `stat()` call
+/// per symlinked pack instead of a full re-parse.
+static SYMLINK_PACK_MTIME_CACHE: OnceLock<Mutex<HashMap<String, SystemTime>>> = OnceLock::new();
+
+fn symlink_pack_mtime_cache() -> &'static Mutex<HashMap<String, SystemTime>> {
+    SYMLINK_PACK_MTIME_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 struct BuiltInPersona {
     id: &'static str,
@@ -946,6 +964,304 @@ pub struct PackSummary {
     pub path: PathBuf,
 }
 
+/// Reconcile `records` for a single resolved pack against its current source state.
+///
+/// Handles ADD / UPDATE / REMOVE for all personas belonging to `pack_id`.
+/// Pure function — no I/O, no AppHandle. Designed for unit testing.
+///
+/// `agents` — current managed agent records, used only when removals are detected.
+/// Pass an empty slice if you know there are no removals (e.g. in tests that only
+/// test ADD/UPDATE paths).
+///
+/// Returns `true` if any mutations were made to `records`.
+fn sync_one_pack(
+    records: &mut Vec<PersonaRecord>,
+    pack_id: &str,
+    resolved: &sprout_persona::resolve::ResolvedPack,
+    agents: &[crate::managed_agents::ManagedAgentRecord],
+    now: &str,
+) -> bool {
+    // Build a map of slug → resolved persona for O(1) lookup.
+    let source_by_slug: HashMap<&str, &sprout_persona::resolve::ResolvedPersona> = resolved
+        .personas
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+
+    // Collect the slugs currently stored for this pack.
+    let stored_slugs: Vec<(usize, String)> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            if r.source_pack.as_deref() == Some(pack_id) {
+                r.source_pack_persona_slug.as_ref().map(|s| (i, s.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut changed = false;
+
+    // ── UPDATE existing records ───────────────────────────────────────────────
+    for (idx, slug) in &stored_slugs {
+        if let Some(src) = source_by_slug.get(slug.as_str()) {
+            let record = &mut records[*idx];
+            let mut record_changed = false;
+
+            if record.display_name != src.display_name {
+                record.display_name = src.display_name.clone();
+                record_changed = true;
+            }
+            if record.system_prompt != src.system_prompt {
+                record.system_prompt = src.system_prompt.clone();
+                record_changed = true;
+            }
+            if record.model.as_deref() != src.model.as_deref() {
+                record.model = src.model.clone();
+                record_changed = true;
+            }
+            if record.provider.as_deref() != src.provider.as_deref() {
+                record.provider = src.provider.clone();
+                record_changed = true;
+            }
+            if record.avatar_url.as_deref() != src.avatar.as_deref() {
+                record.avatar_url = src.avatar.clone();
+                record_changed = true;
+            }
+            // env_vars: sync goose_env_vars from the resolved persona.
+            // These are the projected GOOSE_PROVIDER / GOOSE_MODEL / etc.
+            // vars derived from the persona's model and temperature config.
+            let src_env: std::collections::BTreeMap<String, String> =
+                src.goose_env_vars.iter().cloned().collect();
+            if record.env_vars != src_env {
+                record.env_vars = src_env;
+                record_changed = true;
+            }
+
+            if record_changed {
+                record.updated_at = now.to_string();
+                changed = true;
+            }
+        }
+    }
+
+    // ── REMOVE records no longer in source ───────────────────────────────────
+    let slugs_to_remove: Vec<String> = stored_slugs
+        .iter()
+        .filter(|(_, slug)| !source_by_slug.contains_key(slug.as_str()))
+        .map(|(_, slug)| slug.clone())
+        .collect();
+
+    for slug in &slugs_to_remove {
+        // Find the PersonaRecord.id (UUID) for this slug.
+        let persona_uuid = records
+            .iter()
+            .find(|r| {
+                r.source_pack.as_deref() == Some(pack_id)
+                    && r.source_pack_persona_slug.as_deref() == Some(slug.as_str())
+            })
+            .map(|r| r.id.clone());
+
+        let Some(uuid) = persona_uuid else { continue };
+
+        // Safety gate: if a managed agent references this persona by UUID,
+        // deactivate rather than delete to avoid orphaning it.
+        // Match on persona_id (UUID), not on slug or pack path.
+        let referenced = agents.iter().any(|a| a.persona_id.as_deref() == Some(&uuid));
+
+        if referenced {
+            eprintln!(
+                "sprout-desktop: symlink-pack-sync: persona '{slug}' (pack '{pack_id}') \
+                 removed from source but still referenced by a managed agent — \
+                 deactivating instead of deleting"
+            );
+            if let Some(record) = records.iter_mut().find(|r| r.id == uuid) {
+                if record.is_active {
+                    record.is_active = false;
+                    record.updated_at = now.to_string();
+                    changed = true;
+                }
+            }
+        } else {
+            records.retain(|r| r.id != uuid);
+            changed = true;
+        }
+    }
+
+    // ── ADD new personas from source ──────────────────────────────────────────
+    let stored_slug_set: std::collections::HashSet<&str> = stored_slugs
+        .iter()
+        .map(|(_, s)| s.as_str())
+        .collect();
+
+    for src in &resolved.personas {
+        if stored_slug_set.contains(src.name.as_str()) {
+            continue;
+        }
+
+        let src_env: std::collections::BTreeMap<String, String> =
+            src.goose_env_vars.iter().cloned().collect();
+
+        records.push(PersonaRecord {
+            id: Uuid::new_v4().to_string(),
+            display_name: src.display_name.clone(),
+            avatar_url: src.avatar.clone(),
+            system_prompt: src.system_prompt.clone(),
+            provider: src.provider.clone(),
+            model: src.model.clone(),
+            // Pack personas never use the name pool — agents created from
+            // a pack persona use the persona's display_name directly.
+            name_pool: Vec::new(),
+            is_builtin: false,
+            is_active: true,
+            source_pack: Some(pack_id.to_string()),
+            source_pack_persona_slug: Some(src.name.clone()),
+            env_vars: src_env,
+            created_at: now.to_string(),
+            updated_at: now.to_string(),
+        });
+        changed = true;
+    }
+
+    changed
+}
+
+/// Reconcile `personas.json` with the current on-disk state of symlinked packs.
+///
+/// Scans `packs_dir` for subdirectories that are symlinks, applies an mtime
+/// short-circuit to skip unchanged packs, then calls `sync_one_pack()` for
+/// each changed pack.
+///
+/// `agents` — current managed agent records (used for removal safety gate).
+/// Only consulted when a pack has removals; pass an empty slice in tests that
+/// only exercise ADD/UPDATE paths.
+///
+/// Returns `true` if any mutations were made to `records`.
+fn sync_packs_from_dir(
+    records: &mut Vec<PersonaRecord>,
+    packs_dir: &std::path::Path,
+    agents: &[crate::managed_agents::ManagedAgentRecord],
+    now: &str,
+) -> bool {
+    if !packs_dir.exists() {
+        return false;
+    }
+
+    let entries = match fs::read_dir(packs_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("sprout-desktop: symlink-pack-sync: failed to read packs dir: {e}");
+            return false;
+        }
+    };
+
+    let mut changed = false;
+
+    for entry in entries.flatten() {
+        let pack_dir = entry.path();
+
+        // Only process pack directories that are themselves symlinks.
+        let is_symlink = fs::symlink_metadata(&pack_dir)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if !is_symlink {
+            continue;
+        }
+
+        // Resolve the symlink target to get the real directory path.
+        let real_dir = match fs::canonicalize(&pack_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "sprout-desktop: symlink-pack-sync: broken symlink at {}: {e} — skipping",
+                    pack_dir.display()
+                );
+                continue;
+            }
+        };
+
+        let pack_id = match pack_dir.file_name().and_then(|n| n.to_str()) {
+            Some(id) => id.to_owned(),
+            None => continue,
+        };
+
+        // Mtime short-circuit: stat the real directory. If unchanged since the
+        // last sync, skip the full re-parse — the common case pays one stat().
+        let current_mtime = fs::metadata(&real_dir)
+            .and_then(|m| m.modified())
+            .ok();
+
+        if let Some(mtime) = current_mtime {
+            let mut cache = symlink_pack_mtime_cache().lock().unwrap_or_else(|e| e.into_inner());
+            if cache.get(&pack_id) == Some(&mtime) {
+                // Directory mtime unchanged — nothing to sync for this pack.
+                continue;
+            }
+            // Update cache before resolve_pack so a broken pack doesn't get
+            // hammered on every poll.
+            cache.insert(pack_id.clone(), mtime);
+        }
+
+        // Re-resolve the pack from disk to get the current source state.
+        let resolved = match sprout_persona::resolve::resolve_pack(&real_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "sprout-desktop: symlink-pack-sync: failed to resolve pack at {}: {e} — skipping",
+                    real_dir.display()
+                );
+                continue;
+            }
+        };
+
+        if sync_one_pack(records, &pack_id, &resolved, agents, now) {
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// AppHandle wrapper: resolves packs dir and managed agents, then delegates
+/// to `sync_packs_from_dir`. Agents are loaded once per call — the mtime
+/// short-circuit inside `sync_packs_from_dir` ensures this is a no-op for
+/// packs that haven't changed since the last poll.
+fn sync_symlinked_packs(records: &mut Vec<PersonaRecord>, app: &AppHandle) -> bool {
+    let packs = match packs_dir(app) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("sprout-desktop: symlink-pack-sync: failed to resolve packs dir: {e}");
+            return false;
+        }
+    };
+
+    if !packs.exists() {
+        return false;
+    }
+
+    // Quick pre-scan: if no symlinked packs exist, skip the agent load entirely.
+    let has_symlinked_packs = fs::read_dir(&packs)
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                fs::symlink_metadata(e.path())
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+
+    if !has_symlinked_packs {
+        return false;
+    }
+
+    // Load agents once — only reached when at least one symlinked pack exists.
+    let agents = crate::managed_agents::load_managed_agents(app).unwrap_or_default();
+    let now = now_iso();
+
+    sync_packs_from_dir(records, &packs, &agents, &now)
+}
+
 pub fn load_personas(app: &AppHandle) -> Result<Vec<PersonaRecord>, String> {
     let path = personas_store_path(app)?;
     let now = now_iso();
@@ -959,7 +1275,8 @@ pub fn load_personas(app: &AppHandle) -> Result<Vec<PersonaRecord>, String> {
         Vec::new()
     };
 
-    let (records, changed) = merge_personas(records, &now);
+    let (mut records, mut changed) = merge_personas(records, &now);
+    changed |= sync_symlinked_packs(&mut records, app);
     if changed || !path.exists() {
         save_personas(app, &records)?;
     }
