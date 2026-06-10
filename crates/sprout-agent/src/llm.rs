@@ -300,26 +300,68 @@ impl Llm {
         let body_bytes =
             serde_json::to_vec(body).map_err(|e| AgentError::Llm(format!("serialize: {e}")))?;
         let resp = self
-            .http_stream
-            .post(&url)
-            .header("content-type", "application/json")
-            .header("x-api-key", &cfg.api_key)
-            .header("anthropic-version", &cfg.anthropic_api_version)
-            .body(body_bytes)
-            .send()
-            .await
-            .map_err(|e| AgentError::Llm(format!("transport: {e}")))?;
-        let status = resp.status();
-        if status == 401 || status == 403 {
-            return Err(AgentError::LlmAuth(read_error_body(resp).await));
-        }
-        if !status.is_success() {
-            return Err(AgentError::Llm(format!(
-                "{status}: {}",
-                read_error_body(resp).await
-            )));
-        }
+            .send_stream_with_retry(|| {
+                self.http_stream
+                    .post(&url)
+                    .header("content-type", "application/json")
+                    .header("x-api-key", &cfg.api_key)
+                    .header("anthropic-version", &cfg.anthropic_api_version)
+                    .body(body_bytes.clone())
+            })
+            .await?;
         self.consume_sse_anthropic(resp, emitter).await
+    }
+
+    /// Open an SSE stream with the buffered path's retry semantics applied to
+    /// the *initial* request only. Once this returns Ok, the caller begins
+    /// consuming the stream and emitting chunks; retrying past that point would
+    /// duplicate already-emitted output, so the retry window stops here.
+    /// Transport errors, 5xx, and 429 retry with backoff; auth and other
+    /// non-success statuses surface immediately.
+    async fn send_stream_with_retry<F>(&self, build: F) -> Result<reqwest::Response, AgentError>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        for attempt in 0..MAX_RETRIES {
+            let resp = match build().send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt + 1 < MAX_RETRIES && is_retryable_transport_error(&e) {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            max_attempts = MAX_RETRIES,
+                            error = %e,
+                            "llm: stream transport error, retrying"
+                        );
+                        backoff_with_jitter(attempt).await;
+                        continue;
+                    }
+                    return Err(AgentError::Llm(format!("transport: {e}")));
+                }
+            };
+            let status = resp.status();
+            if status == 401 || status == 403 {
+                return Err(AgentError::LlmAuth(read_error_body(resp).await));
+            }
+            if (status.is_server_error() || status == 429) && attempt + 1 < MAX_RETRIES {
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    max_attempts = MAX_RETRIES,
+                    %status,
+                    "llm: stream retryable status, retrying"
+                );
+                backoff_with_jitter(attempt).await;
+                continue;
+            }
+            if !status.is_success() {
+                return Err(AgentError::Llm(format!(
+                    "{status}: {}",
+                    read_error_body(resp).await
+                )));
+            }
+            return Ok(resp);
+        }
+        Err(AgentError::Llm("exhausted retries".into()))
     }
 
     async fn consume_sse_anthropic(
@@ -510,26 +552,14 @@ impl Llm {
         };
         let body_bytes =
             serde_json::to_vec(body_ref).map_err(|e| AgentError::Llm(format!("serialize: {e}")))?;
-        let resp = self
-            .http_stream
-            .post(&url)
-            .header("content-type", "application/json")
-            .bearer_auth(&bearer)
-            .body(body_bytes)
-            .send()
-            .await
-            .map_err(|e| AgentError::Llm(format!("transport: {e}")))?;
-        let status = resp.status();
-        if status == 401 || status == 403 {
-            return Err(AgentError::LlmAuth(read_error_body(resp).await));
-        }
-        if !status.is_success() {
-            return Err(AgentError::Llm(format!(
-                "{status}: {}",
-                read_error_body(resp).await
-            )));
-        }
-        Ok(resp)
+        self.send_stream_with_retry(|| {
+            self.http_stream
+                .post(&url)
+                .header("content-type", "application/json")
+                .bearer_auth(&bearer)
+                .body(body_bytes.clone())
+        })
+        .await
     }
 
     async fn consume_sse_openai_chat(
@@ -657,7 +687,11 @@ impl Llm {
         emitter: &StreamEmitter,
     ) -> Result<LlmResponse, AgentError> {
         let mut text = String::new();
-        let mut tool_calls_map: HashMap<String, (String, String)> = HashMap::new();
+        // Insertion-ordered accumulator keyed by call_id. A HashMap here would
+        // yield non-deterministic tool-call ordering when a model returns
+        // several calls; the buffered Responses parser preserves the JSON array
+        // order, so the streaming path matches it via first-seen ordering.
+        let mut tool_calls_acc: Vec<(String, String, String)> = Vec::new();
         let mut stop = ProviderStop::Other;
         let mut input_tokens: Option<u64> = None;
         let mut saw_content_delta = false;
@@ -712,11 +746,10 @@ impl Llm {
                                 "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
                             )));
                         }
-                        tool_calls_map
-                            .entry(call_id)
-                            .or_insert_with(|| (String::new(), String::new()))
-                            .1
-                            .push_str(d);
+                        match tool_calls_acc.iter_mut().find(|(id, _, _)| *id == call_id) {
+                            Some(entry) => entry.2.push_str(d),
+                            None => tool_calls_acc.push((call_id, String::new(), d.to_owned())),
+                        }
                     }
                 }
                 "response.output_item.added"
@@ -730,14 +763,11 @@ impl Llm {
                     let call_id = str_field(&data["item"], "call_id");
                     let name = str_field(&data["item"], "name");
                     if !call_id.is_empty() {
-                        tool_calls_map
-                            .entry(call_id)
-                            .and_modify(|e| {
-                                if e.0.is_empty() {
-                                    e.0 = name.clone();
-                                }
-                            })
-                            .or_insert_with(|| (name, String::new()));
+                        match tool_calls_acc.iter_mut().find(|(id, _, _)| *id == call_id) {
+                            Some(entry) if entry.1.is_empty() => entry.1 = name,
+                            Some(_) => {}
+                            None => tool_calls_acc.push((call_id, name, String::new())),
+                        }
                     }
                 }
                 "response.completed" => {
@@ -774,7 +804,7 @@ impl Llm {
         }
 
         let mut tool_calls = Vec::new();
-        for (call_id, (name, args_str)) in tool_calls_map {
+        for (call_id, name, args_str) in tool_calls_acc {
             let arguments: Value =
                 serde_json::from_str(&args_str).unwrap_or(Value::Object(Default::default()));
             tool_calls.push(make_tool_call(call_id, name, arguments)?);
@@ -850,9 +880,24 @@ impl SseReader {
                 }
                 continue;
             }
+            // Bound the raw read buffer independently of the per-event byte
+            // accounting downstream: a stream that never emits an event
+            // boundary (malformed, or a proxy that breaks event framing)
+            // would otherwise grow `buf` without limit before any timeout fires.
+            if self.buf.len() > MAX_LLM_RESPONSE_BYTES {
+                return Err(AgentError::Llm(format!(
+                    "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes without an event boundary"
+                )));
+            }
             match self.resp.chunk().await {
                 Ok(Some(chunk)) => {
-                    self.buf.push_str(&String::from_utf8_lossy(&chunk));
+                    // Normalize CR and CRLF to LF so event framing (split on
+                    // "\n\n") works regardless of how a provider, proxy, or CDN
+                    // terminates lines. The SSE spec treats CR, LF, and CRLF as
+                    // equivalent line terminators.
+                    let text = String::from_utf8_lossy(&chunk);
+                    self.buf
+                        .push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
                 }
                 Ok(None) => {
                     if !self.buf.trim().is_empty() {
@@ -2677,5 +2722,83 @@ mod tests {
         let result = llm.consume_sse_openai_chat(resp, &emitter).await.unwrap();
         assert!(result.text.is_empty());
         assert!(result.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sse_reader_handles_crlf_line_endings() {
+        // Events delimited by \r\n\r\n should be parsed correctly after
+        // normalization to \n\n.
+        let body = "data: {\"type\":\"first\"}\r\n\r\ndata: {\"type\":\"second\"}\r\n\r\n";
+        let resp = sse_response(body.to_owned()).await;
+        let mut reader = SseReader::new(resp);
+
+        let ev1 = reader.next_event().await.unwrap().unwrap();
+        assert_eq!(ev1, "{\"type\":\"first\"}");
+
+        let ev2 = reader.next_event().await.unwrap().unwrap();
+        assert_eq!(ev2, "{\"type\":\"second\"}");
+
+        assert!(reader.next_event().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn sse_reader_handles_bare_cr_line_endings() {
+        // Bare \r should also be normalized to \n per the SSE spec.
+        let body = "data: {\"val\":\"cr\"}\r\rdata: {\"val\":\"end\"}\r\r";
+        let resp = sse_response(body.to_owned()).await;
+        let mut reader = SseReader::new(resp);
+
+        let ev1 = reader.next_event().await.unwrap().unwrap();
+        assert_eq!(ev1, "{\"val\":\"cr\"}");
+
+        let ev2 = reader.next_event().await.unwrap().unwrap();
+        assert_eq!(ev2, "{\"val\":\"end\"}");
+
+        assert!(reader.next_event().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn sse_reader_errors_on_unbounded_buffer() {
+        // A stream that never produces an event boundary should be capped by
+        // the MAX_LLM_RESPONSE_BYTES guard on SseReader.buf.
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener as TcpL;
+
+        let listener = TcpL::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let header =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let _ = sock.write_all(header.as_bytes()).await;
+            // Send data without ever producing a double-newline boundary.
+            // Each chunk is "data: <big payload>" with only a single \n.
+            let chunk = "x".repeat(1024 * 1024); // 1MB
+            for _ in 0..20 {
+                let line = format!("data: {}\n", chunk);
+                let _ = sock.write_all(line.as_bytes()).await;
+            }
+            let _ = sock.shutdown().await;
+        });
+
+        let resp = reqwest::get(format!("http://{addr}")).await.unwrap();
+        let mut reader = SseReader::new(resp);
+        let result = reader.next_event().await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("exceeded") && err_msg.contains("without"),
+            "unexpected error: {err_msg}"
+        );
     }
 }
