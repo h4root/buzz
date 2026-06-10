@@ -732,6 +732,11 @@ impl Llm {
                     if !call_id.is_empty() {
                         tool_calls_map
                             .entry(call_id)
+                            .and_modify(|e| {
+                                if e.0.is_empty() {
+                                    e.0 = name.clone();
+                                }
+                            })
                             .or_insert_with(|| (name, String::new()));
                     }
                 }
