@@ -26,6 +26,9 @@ import { buildTranscriptPresentation } from "./agentSessionTranscriptPresentatio
 import { formatTranscriptTime } from "./agentSessionUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
+/** Dev-only: surface the observer wire label that produced each transcript row. */
+const SHOW_TRANSCRIPT_ACP_SOURCE = import.meta.env.DEV;
+
 export function AgentSessionTranscriptList({
   agentName,
   compact = false,
@@ -87,6 +90,9 @@ export function AgentSessionTranscriptList({
             )}
             key={item.id}
           >
+            {SHOW_TRANSCRIPT_ACP_SOURCE && item.acpSource ? (
+              <TranscriptAcpSourceBadge source={item.acpSource} />
+            ) : null}
             <TranscriptItemView
               agentName={agentName}
               compact={compact}
@@ -98,6 +104,18 @@ export function AgentSessionTranscriptList({
         ))}
       </div>
     </div>
+  );
+}
+
+function TranscriptAcpSourceBadge({ source }: { source: string }) {
+  return (
+    <span
+      className="mb-1 inline-flex max-w-full rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] leading-none text-amber-800 dark:text-amber-200"
+      data-testid="transcript-acp-source"
+      title={`ACP wire source: ${source}`}
+    >
+      {source}
+    </span>
   );
 }
 
