@@ -117,6 +117,7 @@ function upsertMessage(
   timestamp: string,
   channelId: string | null,
   authorPubkey: string | null = null,
+  acpSource?: string,
 ) {
   const currentKey = d.activeMessageKey.get(id);
 
@@ -128,6 +129,7 @@ function upsertMessage(
         text: existing.text + text,
         channelId,
         authorPubkey: authorPubkey ?? existing.authorPubkey,
+        acpSource: acpSource ?? existing.acpSource,
       });
       return;
     }
@@ -144,6 +146,7 @@ function upsertMessage(
     timestamp,
     channelId,
     authorPubkey,
+    acpSource,
   });
   d.activeMessageKey = new Map(d.activeMessageKey);
   d.activeMessageKey.set(id, newKey);
@@ -157,14 +160,20 @@ function upsertTextItem(
   text: string,
   timestamp: string,
   channelId: string | null,
+  acpSource?: string,
 ) {
   const existing = d.itemsById.get(id);
   if (existing && existing.type === type) {
-    replaceItem(d, id, { ...existing, text: existing.text + text, channelId });
+    replaceItem(d, id, {
+      ...existing,
+      text: existing.text + text,
+      channelId,
+      acpSource: acpSource ?? existing.acpSource,
+    });
     return;
   }
   sealOpenMessages(d);
-  pushItem(d, { id, type, title, text, timestamp, channelId });
+  pushItem(d, { id, type, title, text, timestamp, channelId, acpSource });
 }
 
 function upsertMetadata(
@@ -174,14 +183,28 @@ function upsertMetadata(
   sections: PromptSection[],
   timestamp: string,
   channelId: string | null,
+  acpSource?: string,
 ) {
   const existing = d.itemsById.get(id);
   if (existing?.type === "metadata") {
-    replaceItem(d, id, { ...existing, sections, channelId });
+    replaceItem(d, id, {
+      ...existing,
+      sections,
+      channelId,
+      acpSource: acpSource ?? existing.acpSource,
+    });
     return;
   }
   sealOpenMessages(d);
-  pushItem(d, { id, type: "metadata", title, sections, timestamp, channelId });
+  pushItem(d, {
+    id,
+    type: "metadata",
+    title,
+    sections,
+    timestamp,
+    channelId,
+    acpSource,
+  });
 }
 
 function upsertTool(
@@ -196,6 +219,7 @@ function upsertTool(
   isError: boolean,
   timestamp: string,
   channelId: string | null,
+  acpSource?: string,
 ) {
   const existing = d.itemsById.get(id);
   const canonicalBuzzToolName =
@@ -225,6 +249,7 @@ function upsertTool(
           ? timestamp
           : existing.completedAt,
       channelId,
+      acpSource: acpSource ?? existing.acpSource,
     });
     return;
   }
@@ -243,6 +268,7 @@ function upsertTool(
     startedAt: timestamp,
     completedAt: null,
     channelId,
+    acpSource,
   });
 }
 
@@ -268,6 +294,7 @@ export function processTranscriptEvent(
       describeTurnStarted(event.payload),
       event.timestamp,
       channelId,
+      event.kind,
     );
   } else if (event.kind === "session_resolved") {
     upsertTextItem(
@@ -278,6 +305,7 @@ export function processTranscriptEvent(
       describeSessionResolved(event.payload),
       event.timestamp,
       channelId,
+      event.kind,
     );
   } else if (event.kind === "acp_parse_error") {
     upsertTextItem(
@@ -288,6 +316,7 @@ export function processTranscriptEvent(
       extractBlockText(event.payload),
       event.timestamp,
       channelId,
+      event.kind,
     );
   } else if (event.kind === "turn_error" || event.kind === "agent_panic") {
     const payload = asRecord(event.payload);
@@ -303,6 +332,7 @@ export function processTranscriptEvent(
       `${outcome}: ${error}`,
       event.timestamp,
       channelId,
+      event.kind,
     );
   } else if (event.kind === "acp_read" || event.kind === "acp_write") {
     const payload = asRecord(event.payload);
@@ -322,6 +352,7 @@ export function processTranscriptEvent(
             event.timestamp,
             channelId,
             parsedPrompt.userPubkey,
+            "session/prompt:user",
           );
         }
         if (parsedPrompt.sections.length > 0) {
@@ -332,6 +363,7 @@ export function processTranscriptEvent(
             parsedPrompt.sections,
             event.timestamp,
             channelId,
+            "session/prompt:context",
           );
         }
       }
@@ -351,6 +383,8 @@ export function processTranscriptEvent(
           extractContentText(update.content),
           event.timestamp,
           channelId,
+          null,
+          updateType,
         );
       } else if (updateType === "user_message_chunk") {
         upsertMessage(
@@ -361,6 +395,8 @@ export function processTranscriptEvent(
           extractContentText(update.content),
           event.timestamp,
           channelId,
+          null,
+          updateType,
         );
       } else if (updateType === "agent_thought_chunk") {
         upsertTextItem(
@@ -371,6 +407,7 @@ export function processTranscriptEvent(
           extractContentText(update.content),
           event.timestamp,
           channelId,
+          updateType,
         );
       } else if (updateType === "tool_call") {
         const toolId = asString(update.toolCallId) ?? `tool:${event.seq}`;
@@ -387,6 +424,7 @@ export function processTranscriptEvent(
           false,
           event.timestamp,
           channelId,
+          updateType,
         );
       } else if (updateType === "tool_call_update") {
         const toolId = asString(update.toolCallId) ?? `tool:${event.seq}`;
@@ -406,6 +444,7 @@ export function processTranscriptEvent(
           status === "failed",
           event.timestamp,
           channelId,
+          updateType,
         );
       } else if (updateType === "plan") {
         upsertTextItem(
@@ -416,6 +455,7 @@ export function processTranscriptEvent(
           extractContentText(update.content) || JSON.stringify(update, null, 2),
           event.timestamp,
           channelId,
+          updateType,
         );
       }
     }

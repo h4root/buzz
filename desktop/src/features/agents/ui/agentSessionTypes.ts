@@ -20,6 +20,9 @@ export type ConnectionState =
 
 export type ToolStatus = "executing" | "completed" | "failed" | "pending";
 
+/** Observer/ACP wire label for dev-only transcript debugging. */
+export type TranscriptAcpSource = string;
+
 export type TranscriptItem =
   | {
       id: string;
@@ -28,6 +31,7 @@ export type TranscriptItem =
       title: string;
       text: string;
       timestamp: string;
+      acpSource?: TranscriptAcpSource;
       authorPubkey?: string | null;
       channelId?: string | null;
     }
@@ -37,6 +41,7 @@ export type TranscriptItem =
       title: string;
       text: string;
       timestamp: string;
+      acpSource?: TranscriptAcpSource;
       channelId?: string | null;
     }
   | {
@@ -45,6 +50,7 @@ export type TranscriptItem =
       title: string;
       text: string;
       timestamp: string;
+      acpSource?: TranscriptAcpSource;
       channelId?: string | null;
     }
   | {
@@ -53,6 +59,7 @@ export type TranscriptItem =
       title: string;
       sections: PromptSection[];
       timestamp: string;
+      acpSource?: TranscriptAcpSource;
       channelId?: string | null;
     }
   | {
@@ -68,6 +75,7 @@ export type TranscriptItem =
       timestamp: string;
       startedAt: string;
       completedAt: string | null;
+      acpSource?: TranscriptAcpSource;
       channelId?: string | null;
     };
 
