@@ -1,7 +1,10 @@
 import * as React from "react";
 import { ArrowDown, Hash } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { getDmParticipantPreview } from "@/features/channels/lib/dmParticipantDisplay";
+import { buildVirtualTimelineRows } from "@/features/messages/lib/buildVirtualTimelineRows";
+import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
@@ -13,9 +16,28 @@ import { SkeletonReveal } from "@/shared/ui/skeleton";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { TimelineSkeleton, useTimelineSkeletonRows } from "./TimelineSkeleton";
-import { TimelineMessageList } from "./TimelineMessageList";
+import {
+  renderTimelineEntry,
+  type TimelineEntryRenderContext,
+} from "./timelineEntryRender";
 import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
-import { useTimelineScrollManager } from "./useTimelineScrollManager";
+import { useVideoReviewContextById } from "./useVideoReviewContextById";
+import { useVirtualTimelineScroll } from "./useVirtualTimelineScroll";
+import { VirtualizedTimelineList } from "./VirtualizedTimelineList";
+
+// Initial row-size guesses only — `measureElement` corrects each row to its
+// real height after first paint, so variable-height messages and dividers need
+// no fixed-height assumption.
+const ESTIMATED_MESSAGE_HEIGHT = 64;
+const ESTIMATED_DIVIDER_HEIGHT = 32;
+const VIRTUAL_OVERSCAN = 8;
+
+// Fallback escape hatch for find-in-page: when find is open, optionally bypass
+// virtualization and render every row so native browser cmd+F can see all
+// matches. OFF by default — the in-app find path (scroll-to-row via
+// `findVirtualRowIndexForMessage`) is the default and keeps the perf win.
+// Flip via the `renderAllWhileSearching` prop only if QA finds a gap.
+const RENDER_ALL_WHILE_SEARCHING_DEFAULT = false;
 
 type MessageTimelineProps = {
   agentPubkeys?: ReadonlySet<string>;
@@ -70,6 +92,9 @@ type MessageTimelineProps = {
   searchMatchingMessageIds?: Set<string>;
   /** The current find-in-channel query string. */
   searchQuery?: string;
+  /** Escape hatch: render all rows while find-in-page is open so native
+   *  browser cmd+F can see every match. Defaults off (in-app find is default). */
+  renderAllWhileSearching?: boolean;
   targetMessageId?: string | null;
   onTargetReached?: (messageId: string) => void;
 };
@@ -134,6 +159,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
+  renderAllWhileSearching = RENDER_ALL_WHILE_SEARCHING_DEFAULT,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
@@ -158,53 +184,115 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     ? `message-timeline:${channelId ?? "none"}:target:${targetMessageId}`
     : `message-timeline:${channelId ?? "none"}`;
 
+  // Filtered main-timeline entries + flat virtual rows, both off the SAME
+  // deferred snapshot the rows render from (the no-tearing property from
+  // Phase 1). `entryMessages` is what the virtual rows index into, so dropped
+  // thread replies never desync the row→entry mapping.
+  const entries = React.useMemo(
+    () => buildMainTimelineEntries(deferredMessages),
+    [deferredMessages],
+  );
+  const entryMessages = React.useMemo(
+    () => entries.map((entry) => entry.message),
+    [entries],
+  );
+  const rows = React.useMemo(
+    () => buildVirtualTimelineRows(entryMessages),
+    [entryMessages],
+  );
+
+  // When the render-all escape hatch is enabled AND find is open, expand the
+  // overscan to the whole list so native browser cmd+F can see every match.
+  // Default path keeps the lean fixed overscan.
+  const isSearchOpen = Boolean(searchQuery || searchActiveMessageId);
+  const overscan =
+    renderAllWhileSearching && isSearchOpen && rows.length > 0
+      ? rows.length
+      : VIRTUAL_OVERSCAN;
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: (index) =>
+      rows[index]?.kind === "day-divider"
+        ? ESTIMATED_DIVIDER_HEIGHT
+        : ESTIMATED_MESSAGE_HEIGHT,
+    // Stable per-row identity. THIS is what lets a top-prepend (older page)
+    // retain scroll position natively — surviving rows keep their key, so the
+    // measurement cache survives and the virtualizer re-anchors itself. No
+    // before/after scrollHeight delta math, no double-rAF correction.
+    getItemKey: (index) => rows[index]?.key ?? index,
+    overscan,
+  });
+
   const {
-    bottomAnchorRef,
-    contentRef,
     highlightedMessageId,
     isAtBottom,
     newMessageCount,
-    restoreScrollPosition,
     scrollToBottom,
     syncScrollState,
-  } = useTimelineScrollManager({
+  } = useVirtualTimelineScroll({
     channelId,
     isLoading,
-    messages: deferredMessages,
-    onTargetReached,
+    messages: entryMessages,
+    rows,
     scrollContainerRef,
+    virtualizer,
     targetMessageId,
+    onTargetReached,
+    searchActiveMessageId,
   });
 
-  // Scroll to the active search match when it changes.
-  const prevSearchActiveRef = React.useRef<string | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scrollContainerRef is a stable React ref
-  React.useEffect(() => {
-    if (
-      !searchActiveMessageId ||
-      searchActiveMessageId === prevSearchActiveRef.current
-    ) {
-      prevSearchActiveRef.current = searchActiveMessageId;
-      return;
-    }
-    prevSearchActiveRef.current = searchActiveMessageId;
+  const videoReviewContextById = useVideoReviewContextById({
+    channelId,
+    channelName,
+    channelType,
+    isSendingVideoReviewComment,
+    messages: deferredMessages,
+    onSendVideoReviewComment,
+    onToggleReaction,
+    profiles,
+  });
 
-    const container = scrollContainerRef.current;
-    if (!container) return;
+  const renderContext: TimelineEntryRenderContext = {
+    agentPubkeys,
+    channelId,
+    channelType,
+    currentPubkey,
+    followThreadById,
+    highlightedMessageId,
+    isFollowingThreadById,
+    messageFooters,
+    onDelete,
+    onEdit,
+    onMarkUnread,
+    onReply,
+    personaLookup,
+    onToggleReaction,
+    profiles,
+    searchActiveMessageId,
+    searchMatchingMessageIds,
+    searchQuery,
+    unfollowThreadById,
+    videoReviewContextById,
+  };
 
-    const el = container.querySelector<HTMLElement>(
-      `[data-message-id="${searchActiveMessageId}"]`,
-    );
-    if (el) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
-  }, [searchActiveMessageId]);
+  const renderEntry = React.useCallback(
+    (entry: Parameters<typeof renderTimelineEntry>[0]) =>
+      renderTimelineEntry(entry, renderContext),
+    // renderContext is rebuilt every render from the same inputs; the entry
+    // render reads its current values, so depending on the bundle directly
+    // keeps the callback in sync without a stale closure.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: renderContext fields are the real deps
+    [renderContext],
+  );
 
+  // Pagination trigger only — the virtualizer holds scroll position on prepend
+  // natively (stable keys), so there is no position-restore plumbing to pass.
   useLoadOlderOnScroll({
     fetchOlder,
     hasOlderMessages,
     isLoading,
-    restoreScrollPosition,
     scrollContainerRef,
     sentinelRef: topSentinelRef,
   });
@@ -244,7 +332,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
               channelChrome.contentPadding,
               (showIntro || showGenericEmpty) && "min-h-full",
             )}
-            ref={contentRef}
           >
             <div ref={topSentinelRef} aria-hidden className="h-px" />
 
@@ -398,7 +485,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
               {showMessageList ? (
                 <div
                   className={cn(
-                    "flex flex-col gap-2",
+                    "flex flex-col",
                     !showIntro && "mt-auto",
                     // While a deferred render is in flight the painted
                     // list lags the latest `messages`. Dim it slightly so the
@@ -407,36 +494,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                   )}
                   data-render-pending={isRenderPending ? "true" : undefined}
                 >
-                  <TimelineMessageList
-                    agentPubkeys={agentPubkeys}
-                    channelId={channelId}
-                    channelName={channelName}
-                    channelType={channelType}
-                    currentPubkey={currentPubkey}
-                    followThreadById={followThreadById}
-                    highlightedMessageId={highlightedMessageId}
-                    isFollowingThreadById={isFollowingThreadById}
-                    messageFooters={messageFooters}
-                    messages={deferredMessages}
-                    onDelete={onDelete}
-                    onEdit={onEdit}
-                    onMarkUnread={onMarkUnread}
-                    onReply={onReply}
-                    isSendingVideoReviewComment={isSendingVideoReviewComment}
-                    onSendVideoReviewComment={onSendVideoReviewComment}
-                    onToggleReaction={onToggleReaction}
-                    personaLookup={personaLookup}
-                    profiles={profiles}
-                    searchActiveMessageId={searchActiveMessageId}
-                    searchMatchingMessageIds={searchMatchingMessageIds}
-                    searchQuery={searchQuery}
-                    unfollowThreadById={unfollowThreadById}
+                  <VirtualizedTimelineList
+                    entries={entries}
+                    renderEntry={renderEntry}
+                    rows={rows}
+                    virtualizer={virtualizer}
                   />
                 </div>
               ) : null}
             </SkeletonReveal>
-
-            <div aria-hidden className="h-px" ref={bottomAnchorRef} />
           </div>
         </div>
 

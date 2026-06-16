@@ -53,6 +53,19 @@ export function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
+  if (url.endsWith(".json")) {
+    // Node's ESM loader requires an explicit `with { type: "json" }` import
+    // attribute for JSON, but esbuild emits bare `import x from "./f.json"`.
+    // Rather than rewrite every importer, synthesize an ESM module that
+    // default-exports the parsed JSON so the bare import resolves.
+    const filename = fileURLToPath(url);
+    const json = await readFile(filename, "utf8");
+    return {
+      format: "module",
+      source: `export default ${json};`,
+      shortCircuit: true,
+    };
+  }
   if (url.endsWith(".ts") || url.endsWith(".tsx")) {
     const filename = fileURLToPath(url);
     const source = await readFile(filename, "utf8");

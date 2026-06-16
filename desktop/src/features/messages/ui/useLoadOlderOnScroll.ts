@@ -4,29 +4,28 @@ type UseLoadOlderOnScrollOptions = {
   fetchOlder?: () => Promise<void>;
   hasOlderMessages: boolean;
   isLoading: boolean;
-  restoreScrollPosition: (scrollTop: number) => void;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   sentinelRef: React.RefObject<HTMLDivElement | null>;
 };
 
 /**
  * Triggers `fetchOlder` when a sentinel element near the top of the scroll
- * container enters the viewport, then restores the scroll position so the
- * visible content doesn't jump.
+ * container enters the viewport, then re-arms once the fetch settles.
+ *
+ * No scroll-position restoration: the virtualizer keys every row by stable
+ * identity, so when an older page splices in at the top the surviving rows keep
+ * their measurement and the viewport re-anchors natively. The old
+ * `previousHeight`/`previousScrollTop` snapshot + double-`requestAnimationFrame`
+ * `scrollTop` correction is GONE — stable-key retention replaces it (see
+ * `buildVirtualTimelineRows`).
  */
 export function useLoadOlderOnScroll({
   fetchOlder,
   hasOlderMessages,
   isLoading,
-  restoreScrollPosition,
   scrollContainerRef,
   sentinelRef,
 }: UseLoadOlderOnScrollOptions) {
-  const restoreScrollPositionRef = React.useRef(restoreScrollPosition);
-  React.useEffect(() => {
-    restoreScrollPositionRef.current = restoreScrollPosition;
-  });
-
   React.useEffect(() => {
     const sentinel = sentinelRef.current;
     const container = scrollContainerRef.current;
@@ -56,19 +55,10 @@ export function useLoadOlderOnScroll({
 
           currentObserver?.disconnect();
 
-          const previousHeight = container.scrollHeight;
-          const previousScrollTop = container.scrollTop;
           void fetchOlder().then(() => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const newHeight = container.scrollHeight;
-                const delta = newHeight - previousHeight;
-                if (delta > 0) {
-                  restoreScrollPositionRef.current(previousScrollTop + delta);
-                }
-                observe();
-              });
-            });
+            // Re-arm for the next page. The virtualizer holds scroll position
+            // across the prepend on its own, so there is nothing to restore.
+            observe();
           });
         },
         { root: container, rootMargin: "200px 0px 0px 0px" },
