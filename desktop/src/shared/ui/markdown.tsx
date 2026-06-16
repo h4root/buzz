@@ -77,13 +77,17 @@ const loadedThemes = new Set<string>();
 // ─────────────────────────────────────────────────────────────────────────────
 // DEBUG diagnostic (Phase 2 virtualization). When true, inline images that
 // carry an imeta `dim` tag — the ones whose row height we reserve up front in
-// `ImageBlock` — get a red ring so you can SEE the dim-vs-dim-less split in the
-// running app: ringed = height-reserved, un-ringed = `dim`-less natural-load
-// thrasher. Uses `outline` (zero layout impact), never `border`, so toggling it
-// can't shift a single pixel. Flip to false (or delete the const + its one use
-// in `ImageBlock`) to remove. Not for shipping styling.
+// `ImageBlock` — get a red ring AND an absolutely-positioned red badge printing
+// the reserved dims (e.g. `1554×943`) so you can SEE — and READ — the
+// dim-vs-dim-less split in the running app: ringed+badged = height-reserved,
+// bare = `dim`-less natural-load thrasher. The ring uses `outline` (zero layout
+// impact, never `border`) and the badge is absolutely positioned out of flow,
+// so toggling this can't shift a single pixel. Flip to false (or delete the
+// consts + their uses in `ImageBlock`) to remove. Not for shipping styling.
 const DEBUG_RING_DIM_IMAGES = true;
 const DEBUG_DIM_IMAGE_RING_CLASS = "outline outline-2 outline-red-500";
+const DEBUG_DIM_IMAGE_BADGE_CLASS =
+  "absolute -top-2 -left-2 z-10 rounded-sm bg-red-500 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white leading-none shadow pointer-events-none select-none";
 
 const tokenCache = new Map<string, ThemedToken[][]>();
 const MAX_CACHE_ENTRIES = 100;
@@ -314,29 +318,48 @@ function ImageBlock({
   };
 
   const reserved = reservedImageSize(dim);
+  const debugDims =
+    DEBUG_RING_DIM_IMAGES && reserved ? (dim ?? "").replace(/x/i, "×") : null;
+
+  const image = (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: image opens lightbox on click; keyboard equivalent handled by lightbox close button
+    <img
+      alt={alt}
+      className={cn(
+        "mt-1 block h-auto max-h-64 max-w-sm cursor-pointer rounded-xl object-contain",
+        // DEBUG: ring the dim-reserved images so the dim-vs-dim-less split is
+        // visible in the running app. `outline` only — zero layout impact.
+        DEBUG_RING_DIM_IMAGES && reserved && DEBUG_DIM_IMAGE_RING_CLASS,
+      )}
+      // Reserve the rendered box from imeta `dim` so the row's height is
+      // stable BEFORE the image loads — no zero-then-grow reflow thrashing the
+      // virtualized list. width/height stay within the max-h-64/max-w-sm caps
+      // (reservedImageSize pre-scales to them), so the caps never shrink it
+      // further. Falls back to natural load when `dim` is absent.
+      height={reserved?.height}
+      src={resolvedSrc}
+      width={reserved?.width}
+      onClick={() => setLightboxOpen(true)}
+      onContextMenuCapture={handleContextMenu}
+    />
+  );
 
   return (
     <>
-      {/* biome-ignore lint/a11y/useKeyWithClickEvents: image opens lightbox on click; keyboard equivalent handled by lightbox close button */}
-      <img
-        alt={alt}
-        className={cn(
-          "mt-1 block h-auto max-h-64 max-w-sm cursor-pointer rounded-xl object-contain",
-          // DEBUG: ring the dim-reserved images so the dim-vs-dim-less split is
-          // visible in the running app. `outline` only — zero layout impact.
-          DEBUG_RING_DIM_IMAGES && reserved && DEBUG_DIM_IMAGE_RING_CLASS,
-        )}
-        // Reserve the rendered box from imeta `dim` so the row's height is
-        // stable BEFORE the image loads — no zero-then-grow reflow thrashing the
-        // virtualized list. width/height stay within the max-h-64/max-w-sm caps
-        // (reservedImageSize pre-scales to them), so the caps never shrink it
-        // further. Falls back to natural load when `dim` is absent.
-        height={reserved?.height}
-        src={resolvedSrc}
-        width={reserved?.width}
-        onClick={() => setLightboxOpen(true)}
-        onContextMenuCapture={handleContextMenu}
-      />
+      {/* DEBUG: when the badge is active, wrap in a relative box so the
+          absolutely-positioned dims badge anchors to the image. When the flag
+          is off, render the bare image — zero structural change, true revert. */}
+      {debugDims ? (
+        <span className="relative inline-block align-top">
+          {image}
+          {/* DEBUG: red badge printing the reserved dims (e.g. `1554×943`) so
+              the expected box is readable at a glance, not just a ring.
+              Absolutely positioned out of flow — never shifts a pixel. */}
+          <span className={DEBUG_DIM_IMAGE_BADGE_CLASS}>{debugDims}</span>
+        </span>
+      ) : (
+        image
+      )}
       {menu && src ? (
         <div
           className="fixed z-[100] min-w-[160px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
