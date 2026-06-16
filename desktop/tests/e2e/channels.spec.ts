@@ -20,6 +20,13 @@ async function closeChannelManagement(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
 }
 
+async function openChannelEditDialog(page: import("@playwright/test").Page) {
+  await page.getByTestId("channel-management-edit").click();
+  await expect(
+    page.getByRole("dialog", { name: "Edit channel" }),
+  ).toBeVisible();
+}
+
 async function openMembersSidebar(
   page: import("@playwright/test").Page,
   channelName: string,
@@ -983,28 +990,30 @@ test("manage channel updates details and context", async ({ page }) => {
 
   await page.goto("/");
   await openChannelManagement(page, "general");
+  await openChannelEditDialog(page);
+  const editDialog = page.getByRole("dialog", { name: "Edit channel" });
 
-  await page.getByTestId("channel-management-name").fill(newName);
-  await page.getByTestId("channel-management-description").fill(newDescription);
-  await page.getByTestId("channel-management-save-details").click();
+  await editDialog.getByTestId("channel-management-name").fill(newName);
+  await editDialog
+    .getByTestId("channel-management-description")
+    .fill(newDescription);
+  await editDialog.getByTestId("channel-management-topic").fill(newTopic);
+  await editDialog.getByTestId("channel-management-purpose").fill(newPurpose);
+  await editDialog.getByTestId("channel-management-save-changes").click();
+  await expect(editDialog).toHaveCount(0);
 
   await expect(page.getByTestId("chat-title")).toHaveText(newName);
   await expect(page.getByTestId("stream-list")).toContainText(newName);
-
-  const saveTopicButton = page.getByTestId("channel-management-save-topic");
-  const savePurposeButton = page.getByTestId("channel-management-save-purpose");
-
-  await page.getByTestId("channel-management-topic").fill(newTopic);
-  await saveTopicButton.click();
-  await expect(saveTopicButton).toHaveText("Save topic");
-  await expect(page.getByTestId("channel-management-topic")).toHaveValue(
+  await expect(page.getByTestId("channel-management-name-row")).toContainText(
+    newName,
+  );
+  await expect(
+    page.getByTestId("channel-management-description"),
+  ).toContainText(newDescription);
+  await expect(page.getByTestId("channel-management-topic")).toContainText(
     newTopic,
   );
-
-  await page.getByTestId("channel-management-purpose").fill(newPurpose);
-  await savePurposeButton.click();
-  await expect(savePurposeButton).toHaveText("Save purpose");
-  await expect(page.getByTestId("channel-management-purpose")).toHaveValue(
+  await expect(page.getByTestId("channel-management-purpose")).toContainText(
     newPurpose,
   );
 
@@ -1017,19 +1026,23 @@ test("manage channel updates details and context", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(newName);
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await openChannelEditDialog(page);
+  const reopenedEditDialog = page.getByRole("dialog", {
+    name: "Edit channel",
+  });
 
-  await expect(page.getByTestId("channel-management-name")).toHaveValue(
-    newName,
-  );
-  await expect(page.getByTestId("channel-management-description")).toHaveValue(
-    newDescription,
-  );
-  await expect(page.getByTestId("channel-management-topic")).toHaveValue(
-    newTopic,
-  );
-  await expect(page.getByTestId("channel-management-purpose")).toHaveValue(
-    newPurpose,
-  );
+  await expect(
+    reopenedEditDialog.getByTestId("channel-management-name"),
+  ).toHaveValue(newName);
+  await expect(
+    reopenedEditDialog.getByTestId("channel-management-description"),
+  ).toHaveValue(newDescription);
+  await expect(
+    reopenedEditDialog.getByTestId("channel-management-topic"),
+  ).toHaveValue(newTopic);
+  await expect(
+    reopenedEditDialog.getByTestId("channel-management-purpose"),
+  ).toHaveValue(newPurpose);
 });
 
 test("manage channel updates visibility and ephemeral lifecycle independently", async ({
@@ -1037,21 +1050,19 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
 }) => {
   await page.goto("/");
   await openChannelManagement(page, "general");
+  await openChannelEditDialog(page);
 
-  const saveDetailsButton = page.getByTestId("channel-management-save-details");
-  const saveLifecycleButton = page.getByTestId(
-    "channel-management-save-lifecycle",
-  );
+  let saveChangesButton = page.getByTestId("channel-management-save-changes");
 
-  await expect(saveLifecycleButton).toBeDisabled();
+  await expect(saveChangesButton).toBeDisabled();
 
   await page.getByTestId("channel-management-private-toggle").click();
   await page.getByTestId("channel-management-ephemeral-toggle").click();
   await expect(page.getByTestId("channel-management-ttl")).toBeVisible();
-  await expect(saveLifecycleButton).toBeEnabled();
+  await expect(saveChangesButton).toBeEnabled();
 
   const commandCountBeforeEnable = (await readCommandPayloadLog(page)).length;
-  await saveLifecycleButton.click();
+  await saveChangesButton.click();
   await expect
     .poll(async () =>
       (await readCommandPayloadLog(page)).slice(commandCountBeforeEnable),
@@ -1064,8 +1075,9 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
         }),
       }),
     );
-  await expect(saveLifecycleButton).toHaveText("Save visibility");
-  await expect(saveDetailsButton).toHaveText("Save details");
+  await expect(page.getByRole("dialog", { name: "Edit channel" })).toHaveCount(
+    0,
+  );
 
   const channelAfterEnable = await invokeMockCommand<{
     ttl_seconds: number | null;
@@ -1080,6 +1092,8 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
 
   await closeChannelManagement(page);
   await openChannelManagement(page, "general");
+  await openChannelEditDialog(page);
+  saveChangesButton = page.getByTestId("channel-management-save-changes");
 
   await expect(
     page.getByTestId("channel-management-private-toggle"),
@@ -1091,10 +1105,10 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
 
   await page.getByTestId("channel-management-private-toggle").click();
   await page.getByTestId("channel-management-ephemeral-toggle").click();
-  await expect(saveLifecycleButton).toBeEnabled();
+  await expect(saveChangesButton).toBeEnabled();
 
   const commandCountBeforeDisable = (await readCommandPayloadLog(page)).length;
-  await saveLifecycleButton.click();
+  await saveChangesButton.click();
   await expect
     .poll(async () =>
       (await readCommandPayloadLog(page)).slice(commandCountBeforeDisable),
@@ -1107,9 +1121,9 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
         }),
       }),
     );
-  await expect(saveLifecycleButton).toHaveText("Save visibility");
-  await expect(saveDetailsButton).toHaveText("Save details");
-  await expect(page.getByTestId("channel-management-ttl")).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Edit channel" })).toHaveCount(
+    0,
+  );
 
   const channelAfterDisable = await invokeMockCommand<{
     ttl_seconds: number | null;
@@ -1124,6 +1138,7 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
 
   await closeChannelManagement(page);
   await openChannelManagement(page, "general");
+  await openChannelEditDialog(page);
 
   await expect(
     page.getByTestId("channel-management-private-toggle"),
@@ -1142,12 +1157,12 @@ test("manage channel keeps canvas near the top of the sheet", async ({
 
   const sheet = page.getByTestId("channel-management-sheet");
 
-  // Canvas section should appear before the name input in the DOM.
+  // Canvas ingress should appear before the channel metadata rows in the DOM.
   const canvasBox = await sheet
-    .getByTestId("channel-canvas-section")
+    .getByTestId("channel-canvas-ingress")
     .boundingBox();
   const nameBox = await sheet
-    .getByTestId("channel-management-name")
+    .getByTestId("channel-management-name-row")
     .boundingBox();
 
   expect(canvasBox).not.toBeNull();
