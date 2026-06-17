@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   BOTTOM_THRESHOLD_PX,
   buildDayGroupBoundaries,
+  buildTimelineVirtualItems,
   isNearBottomMetrics,
   resolveDeepLinkTarget,
   selectDeferredListRenderState,
@@ -286,4 +287,110 @@ test("deferred-render: keys the empty decision off the live count, not deferred"
   // the empty state is a function of the LIVE list, never the lagging one.
   assert.equal(selectDeferredListRenderState(0, 0), "empty");
   assert.equal(selectDeferredListRenderState(0, 1), "pending");
+});
+
+// --- flat virtual-item model (main timeline virtualization) -----------------
+//
+// buildTimelineVirtualItems flattens the entries + day boundaries +
+// firstUnreadMessageId into the ordered, keyed row list the virtualizer
+// measures. It must mirror the legacy TimelineMessageList render walk exactly:
+// one item per measured row, dividers as their own items, byte-identical keys.
+
+function entry(overrides, summary = null) {
+  return { message: message(overrides), summary };
+}
+
+test("virtual-items: empty entries produce no items", () => {
+  assert.deepEqual(buildTimelineVirtualItems([]), []);
+});
+
+test("virtual-items: a single message opens a day then the message, no unread divider at index 0", () => {
+  const items = buildTimelineVirtualItems(
+    [entry({ id: "a", createdAt: dayAt(2026, 6, 14) })],
+    "a", // first-unread is the only row → divider suppressed (nothing above)
+  );
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["day", "message"],
+  );
+  assert.equal(items[0].key, `day-${dayAt(2026, 6, 14)}`);
+  assert.equal(items[1].key, "a");
+});
+
+test("virtual-items: a calendar-day boundary inserts a second day item", () => {
+  const items = buildTimelineVirtualItems([
+    entry({ id: "a", createdAt: dayAt(2026, 6, 14) }),
+    entry({ id: "b", createdAt: dayAt(2026, 6, 15) }),
+  ]);
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["day", "message", "day", "message"],
+  );
+});
+
+test("virtual-items: unread divider precedes the first unread message when it is not index 0", () => {
+  const items = buildTimelineVirtualItems(
+    [
+      entry({ id: "a", createdAt: dayAt(2026, 6, 14) }),
+      entry({ id: "b", createdAt: dayAt(2026, 6, 14, 13) }),
+    ],
+    "b",
+  );
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["day", "message", "unread", "message"],
+  );
+  // Divider sits immediately above its anchor and is keyed off that anchor.
+  assert.equal(items[2].key, "unread-b");
+  assert.equal(items[3].key, "b");
+});
+
+test("virtual-items: a system message routes to a system item", () => {
+  const items = buildTimelineVirtualItems([
+    entry({ id: "sys", kind: 40099, createdAt: dayAt(2026, 6, 14) }),
+  ]);
+  assert.equal(items[1].kind, "system");
+  assert.equal(items[1].message.id, "sys");
+});
+
+test("virtual-items: a message item carries its inline thread summary, never a separate item", () => {
+  const summary = {
+    threadHeadId: "a",
+    replyCount: 2,
+    lastReplyAt: null,
+    participants: [],
+  };
+  const items = buildTimelineVirtualItems([
+    entry({ id: "a", createdAt: dayAt(2026, 6, 14) }, summary),
+  ]);
+  // No extra item for the summary — it rides on the one measured message row.
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["day", "message"],
+  );
+  assert.equal(items[1].summary, summary);
+});
+
+test("virtual-items: row key prefers renderKey to keep optimistic-send identity stable", () => {
+  const items = buildTimelineVirtualItems([
+    entry({ id: "server-id", renderKey: "local-key" }),
+  ]);
+  assert.equal(items[1].key, "local-key");
+});
+
+test("virtual-items: item count equals entries plus one day item per calendar day plus dividers", () => {
+  // 3 messages across 2 days, first-unread on the 3rd (index 2 → divider shows):
+  // days: 2 → 2 day items; messages: 3; unread: 1. Total = 6.
+  const items = buildTimelineVirtualItems(
+    [
+      entry({ id: "a", createdAt: dayAt(2026, 6, 14) }),
+      entry({ id: "b", createdAt: dayAt(2026, 6, 14, 13) }),
+      entry({ id: "c", createdAt: dayAt(2026, 6, 15) }),
+    ],
+    "c",
+  );
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["day", "message", "message", "day", "unread", "message"],
+  );
 });

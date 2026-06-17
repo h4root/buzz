@@ -11,7 +11,13 @@
  */
 
 import type { TimelineMessage } from "@/features/messages/types";
+import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { isSameDay } from "./dateFormatters";
+import {
+  type MainTimelineEntry,
+  type TimelineThreadSummary,
+  shouldRenderUnreadDivider,
+} from "./threadPanel";
 
 /** Distance (px) from the bottom within which the timeline counts as "at bottom". */
 export const BOTTOM_THRESHOLD_PX = 72;
@@ -147,4 +153,77 @@ export function selectDeferredListRenderState(
     return "empty";
   }
   return "pending";
+}
+
+/**
+ * One row in the flattened, virtualizer-ready timeline. Each item is the unit
+ * the virtualizer measures and positions, so every divider that the legacy
+ * `TimelineMessageList` rendered as a sibling node becomes its own item here.
+ *
+ *   - "day"     → a day-boundary heading; renders the sticky `DayDivider`
+ *   - "unread"  → the "New" read/unread boundary above the first unread message
+ *   - "system"  → a system message (join/leave); renders `SystemMessageRow`
+ *   - "message" → a normal message; carries the thread `summary` it renders
+ *                 inline beneath the row (never a separate item — keeping the
+ *                 summary on the message row preserves one measured unit per
+ *                 message, which the virtualizer's height cache depends on)
+ *
+ * `key` is the React/virtualizer key and is byte-identical to the keys the
+ * legacy list used, so deep-link `data-message-id` lookups and test selectors
+ * keep resolving across the migration.
+ */
+export type TimelineVirtualItem =
+  | { kind: "day"; key: string; headingTimestamp: number }
+  | { kind: "unread"; key: string }
+  | { kind: "system"; key: string; message: TimelineMessage }
+  | {
+      kind: "message";
+      key: string;
+      message: TimelineMessage;
+      summary: TimelineThreadSummary | null;
+    };
+
+/**
+ * Flattens the main-timeline entries into the ordered virtual-item list the
+ * virtualizer consumes. Mirrors the legacy `TimelineMessageList` render walk
+ * exactly: a day divider opens each new calendar-day group, an unread divider
+ * precedes the first unread top-level message (suppressed at index 0), and each
+ * entry becomes a `system` or `message` item. Pure over the snapshot so the
+ * ordering and divider rules stay lib-tested without a DOM.
+ */
+export function buildTimelineVirtualItems(
+  entries: readonly MainTimelineEntry[],
+  firstUnreadMessageId: string | null = null,
+): TimelineVirtualItem[] {
+  const items: TimelineVirtualItem[] = [];
+  const dayGroupStartIndices = new Set(
+    buildDayGroupBoundaries(entries.map((entry) => entry.message)).map(
+      (boundary) => boundary.startIndex,
+    ),
+  );
+
+  for (let i = 0; i < entries.length; i++) {
+    const { message, summary } = entries[i];
+    const messageKey = message.renderKey ?? message.id;
+
+    if (dayGroupStartIndices.has(i)) {
+      items.push({
+        kind: "day",
+        key: `day-${message.createdAt}`,
+        headingTimestamp: message.createdAt,
+      });
+    }
+
+    if (shouldRenderUnreadDivider(i, message.id, firstUnreadMessageId)) {
+      items.push({ kind: "unread", key: `unread-${messageKey}` });
+    }
+
+    if (message.kind === KIND_SYSTEM_MESSAGE) {
+      items.push({ kind: "system", key: messageKey, message });
+    } else {
+      items.push({ kind: "message", key: messageKey, message, summary });
+    }
+  }
+
+  return items;
 }
