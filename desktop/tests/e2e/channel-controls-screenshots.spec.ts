@@ -171,7 +171,7 @@ test.describe("channel controls screenshots", () => {
       page.getByRole("dialog", { name: "Edit channel" }),
     ).toHaveCount(0);
 
-    await page.keyboard.press("Escape");
+    await page.getByTestId("channel-management-close").click();
     await expect(
       page.getByTestId("channel-management-sheet"),
     ).not.toBeVisible();
