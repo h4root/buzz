@@ -45,15 +45,39 @@ export function useHomeInboxReadState({
   markDoneLocal,
   undoDoneLocal,
 }: UseHomeInboxReadStateOptions) {
+  const [forcedUnreadItemIds, setForcedUnreadItemIds] = React.useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const itemById = React.useMemo(
     () => new Map(items.map((item) => [item.id, item])),
     [items],
   );
 
+  React.useEffect(() => {
+    setForcedUnreadItemIds((current) => {
+      if (current.size === 0) {
+        return current;
+      }
+
+      const next = new Set<string>();
+      for (const item of items) {
+        if (current.has(item.id)) {
+          next.add(item.id);
+        }
+      }
+
+      return next.size === current.size ? current : next;
+    });
+  }, [items]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion invalidates getChannelReadAt
   const effectiveDoneSet = React.useMemo<ReadonlySet<string>>(() => {
     const result = new Set<string>();
     for (const item of items) {
+      if (forcedUnreadItemIds.has(item.id)) {
+        continue;
+      }
+
       const channelId = item.item.channelId;
       if (channelId) {
         const readAt = getChannelReadAt(channelId);
@@ -67,10 +91,26 @@ export function useHomeInboxReadState({
       }
     }
     return result;
-  }, [getChannelReadAt, items, localDoneSet, readStateVersion]);
+  }, [
+    forcedUnreadItemIds,
+    getChannelReadAt,
+    items,
+    localDoneSet,
+    readStateVersion,
+  ]);
 
   const markItemRead = React.useCallback(
     (itemId: string) => {
+      setForcedUnreadItemIds((current) => {
+        if (!current.has(itemId)) {
+          return current;
+        }
+
+        const next = new Set(current);
+        next.delete(itemId);
+        return next;
+      });
+
       const item = itemById.get(itemId);
       const channelId = item?.item.channelId ?? null;
       if (item && channelId) {
@@ -87,6 +127,14 @@ export function useHomeInboxReadState({
 
   const markItemUnread = React.useCallback(
     (itemId: string) => {
+      setForcedUnreadItemIds((current) => {
+        if (current.has(itemId)) {
+          return current;
+        }
+
+        return new Set(current).add(itemId);
+      });
+
       const item = itemById.get(itemId);
       const channelId = item?.item.channelId ?? null;
       if (item && channelId) {

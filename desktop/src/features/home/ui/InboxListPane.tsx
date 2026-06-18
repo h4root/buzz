@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Mail } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -88,22 +88,32 @@ export function InboxListPane({
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-start gap-2">
+          <div className="flex items-baseline gap-2">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <p className="truncate text-sm font-semibold text-foreground">
-                  {item.senderLabel}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-sm font-semibold text-foreground">
+                    {item.senderLabel}
+                  </p>
+                  {item.isActionRequired ? (
+                    <span className="inline-flex shrink-0 items-center text-2xs font-semibold uppercase tracking-[0.14em] text-amber-600 dark:text-amber-300">
+                      Needs action
+                    </span>
+                  ) : null}
+                </div>
+                <p
+                  className={cn(
+                    "mt-0.5 truncate text-2xs text-muted-foreground",
+                    isDone ? "font-normal" : "font-semibold",
+                  )}
+                >
+                  {typeLabel}
                 </p>
-                {item.isActionRequired ? (
-                  <span className="inline-flex shrink-0 items-center text-2xs font-semibold uppercase tracking-[0.14em] text-amber-600 dark:text-amber-300">
-                    Needs action
-                  </span>
-                ) : null}
               </div>
             </div>
             <span
               className={cn(
-                "shrink-0 text-xs text-muted-foreground",
+                "shrink-0 text-xs leading-5 text-muted-foreground",
                 isDone ? "font-normal" : "font-semibold",
               )}
             >
@@ -126,17 +136,6 @@ export function InboxListPane({
               mentionNames={item.mentionNames}
             />
           </div>
-
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span
-              className={cn(
-                "text-2xs text-muted-foreground",
-                isDone ? "font-normal" : "font-semibold",
-              )}
-            >
-              {typeLabel}
-            </span>
-          </div>
         </div>
       </button>
     );
@@ -153,7 +152,11 @@ export function InboxListPane({
         <div className="px-5 py-1">
           {/* Cap to the list-column width so the right-aligned dropdown stays
               put when the pane goes full-width in reminders mode. */}
-          <div className="flex min-w-0 max-w-[var(--home-inbox-list-width)] items-center justify-end gap-3">
+          <div className="flex min-w-0 max-w-[var(--home-inbox-list-width)] items-center justify-between gap-3">
+            <h1 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground">
+              <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">Inbox</span>
+            </h1>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button

@@ -88,6 +88,9 @@ const weekdayFormatter = new Intl.DateTimeFormat("en-US", {
   weekday: "long",
 });
 
+/** Shared text cap for inbox list previews, including long agent responses. */
+export const INBOX_PREVIEW_MAX_LENGTH = 160;
+
 function startOfDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 }
@@ -134,9 +137,13 @@ function feedHeadline(item: FeedItem) {
 }
 
 function feedPreview(item: FeedItem) {
-  const content = item.content.trim();
+  const content = item.content.trim().replace(/\s+/g, " ");
   if (content.length > 0) {
-    return content;
+    if (content.length <= INBOX_PREVIEW_MAX_LENGTH) {
+      return content;
+    }
+
+    return `${content.slice(0, INBOX_PREVIEW_MAX_LENGTH - 3).trimEnd()}...`;
   }
 
   if (item.kind === 46010) {
