@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { IdentityInitialsAvatar } from "./IdentityInitialsAvatar";
 
 type ClusterLayout = {
@@ -7,13 +8,17 @@ type ClusterLayout = {
 };
 
 type AgentProviderCollageProps = {
+  avatarUrl?: string | null;
   label: string;
 };
 
 const CLUSTER_CENTER_TOP_PERCENT = 50;
 const AGENT_INITIAL_AVATAR_SIZE = 152;
 
-export function AgentProviderCollage({ label }: AgentProviderCollageProps) {
+export function AgentProviderCollage({
+  avatarUrl,
+  label,
+}: AgentProviderCollageProps) {
   const { avatarStyle } = buildClusterPoints();
 
   return (
@@ -24,11 +29,21 @@ export function AgentProviderCollage({ label }: AgentProviderCollageProps) {
           data-agent-cluster-item="avatar"
           style={avatarStyle}
         >
-          <IdentityInitialsAvatar
-            colorSeed={label}
-            label={label}
-            size={AGENT_INITIAL_AVATAR_SIZE}
-          />
+          {avatarUrl ? (
+            <ProfileAvatar
+              avatarUrl={avatarUrl}
+              className="h-full w-full"
+              iconClassName="h-12 w-12"
+              label={label}
+              testId="agent-card-avatar"
+            />
+          ) : (
+            <IdentityInitialsAvatar
+              colorSeed={label}
+              label={label}
+              size={AGENT_INITIAL_AVATAR_SIZE}
+            />
+          )}
         </div>
       </div>
     </div>

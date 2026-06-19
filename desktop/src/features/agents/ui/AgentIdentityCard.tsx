@@ -3,6 +3,7 @@ import { AgentProviderCollage } from "./AgentProviderCollage";
 
 type AgentIdentityCardProps = {
   ariaLabel: string;
+  avatarUrl?: string | null;
   dataTestId: string;
   label: string;
   modelLabel: string;
@@ -11,6 +12,7 @@ type AgentIdentityCardProps = {
 
 export function AgentIdentityCard({
   ariaLabel,
+  avatarUrl,
   dataTestId,
   label,
   modelLabel,
@@ -26,7 +28,7 @@ export function AgentIdentityCard({
       onClick={onClick}
       type="button"
     >
-      <AgentProviderCollage label={label} />
+      <AgentProviderCollage avatarUrl={avatarUrl} label={label} />
 
       <div className="absolute right-3 bottom-3 left-3 z-30 flex min-w-0 flex-col gap-0.5 text-left text-sm leading-5">
         <span className="min-w-0 truncate font-semibold text-foreground tracking-normal">

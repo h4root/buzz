@@ -231,6 +231,7 @@ function AgentPersonaCard({
   return (
     <AgentIdentityCard
       ariaLabel={`${title} agent profile`}
+      avatarUrl={persona.avatarUrl}
       dataTestId={`persona-agent-row-${persona.id}`}
       label={title}
       modelLabel={modelLabel}
