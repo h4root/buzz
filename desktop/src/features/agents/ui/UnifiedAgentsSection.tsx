@@ -96,6 +96,18 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     () => buildUnifiedGroups(personas, agents),
     [personas, agents],
   );
+  const additionalPersonaAgents = React.useMemo(() => {
+    const additional: ManagedAgent[] = [];
+    for (const group of groups) {
+      const primary = pickProfileAgent(group.agents);
+      for (const agent of group.agents) {
+        if (primary?.pubkey !== agent.pubkey) {
+          additional.push(agent);
+        }
+      }
+    }
+    return additional;
+  }, [groups]);
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const {
     fileInputRef,
@@ -164,6 +176,16 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
             />
           </div>
 
+          {additionalPersonaAgents.length > 0 ? (
+            <CollapsibleAgentGroup
+              agents={additionalPersonaAgents}
+              collapsed={collapsed}
+              groupKey="__additional_persona_agents__"
+              label="Additional agent instances"
+              onToggle={toggle}
+              onOpenAgentProfile={onOpenAgentProfile}
+            />
+          ) : null}
           {unknown.length > 0 ? (
             <CollapsibleAgentGroup
               agents={unknown}
