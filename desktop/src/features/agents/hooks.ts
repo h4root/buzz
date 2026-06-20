@@ -264,11 +264,11 @@ export function useUpdateManagedAgentMutation() {
       );
     },
     onSettled: async (_data, _error, variables) => {
-      // Backend republishes kind:0 on a name change (sync_managed_agent_profile),
-      // so the relay has fresh profile data — but the desktop's React Query cache
-      // for ["user-profile", pubkey] has a 60s staleTime and will not refetch on
+      // Backend republishes kind:0 on name/avatar changes, so the relay has
+      // fresh profile data — but the desktop's React Query cache for
+      // ["user-profile", pubkey] has a 60s staleTime and will not refetch on
       // its own. Invalidate explicitly so the profile pane re-renders against
-      // the new display name / about / NIP-05 immediately. Also poke any
+      // the new display name/avatar immediately. Also poke any
       // ["users-batch", ...] entries that include this pubkey so sidebar member
       // rows, channel header chips, and message author labels refresh too.
       const lowerPubkey = variables.pubkey.toLowerCase();

@@ -5,6 +5,7 @@ import type {
   ManagedAgent,
   Profile,
   RelayAgent,
+  UpdateManagedAgentInput,
 } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -156,6 +157,54 @@ export function resolveAgentInstruction(
   return (
     managedAgent?.systemPrompt?.trim() || persona?.systemPrompt.trim() || null
   );
+}
+
+export function personaManagedAgentUpdate(
+  agent: ManagedAgent,
+  persona: AgentPersona,
+): UpdateManagedAgentInput | null {
+  if (agent.personaId !== persona.id) return null;
+
+  const input: UpdateManagedAgentInput = { pubkey: agent.pubkey };
+  let hasChanges = false;
+
+  if (persona.displayName !== agent.name) {
+    input.name = persona.displayName;
+    hasChanges = true;
+  }
+
+  if ((persona.avatarUrl ?? null) !== (agent.avatarUrl ?? null)) {
+    input.avatarUrl = persona.avatarUrl;
+    hasChanges = true;
+  }
+
+  if (persona.systemPrompt !== (agent.systemPrompt ?? "")) {
+    input.systemPrompt = persona.systemPrompt;
+    hasChanges = true;
+  }
+
+  if ((persona.model ?? null) !== (agent.model ?? null)) {
+    input.model = persona.model;
+    hasChanges = true;
+  }
+
+  if (!stringRecordEqual(persona.envVars, agent.envVars)) {
+    input.envVars = persona.envVars;
+    hasChanges = true;
+  }
+
+  return hasChanges ? input : null;
+}
+
+function stringRecordEqual(
+  left: Record<string, string>,
+  right: Record<string, string>,
+) {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+
+  return leftKeys.every((key) => left[key] === right[key]);
 }
 
 export function useRetainedPersona(

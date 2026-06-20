@@ -25,6 +25,7 @@ import {
   useSetPersonaActiveMutation,
   useStartManagedAgentMutation,
   useStopManagedAgentMutation,
+  useUpdateManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
 import { AddAgentToChannelDialog } from "@/features/agents/ui/AddAgentToChannelDialog";
@@ -64,6 +65,7 @@ import {
 } from "@/features/profile/ui/UserProfilePanelSections";
 import { useProfileAgentDeletion } from "@/features/profile/ui/UserProfilePanelDeletion";
 import { useProfileFieldBuckets } from "@/features/profile/ui/UserProfilePanelFields";
+import { submitProfilePersonaDialog } from "@/features/profile/ui/UserProfilePanelPersonaSubmit";
 import { UserProfilePersonaDialogs } from "@/features/profile/ui/UserProfilePersonaDialogs";
 import {
   buildPersonaDraftProfile,
@@ -200,6 +202,7 @@ export function UserProfilePanel({
   const availableRuntimesQuery = useAvailableAcpRuntimes();
   const acpRuntimesQuery = useAcpRuntimesQuery();
   const createAgentMutation = useCreateManagedAgentMutation();
+  const updateManagedAgentMutation = useUpdateManagedAgentMutation();
   const startAgentMutation = useStartManagedAgentMutation();
   const stopAgentMutation = useStopManagedAgentMutation();
   const deleteAgentMutation = useDeleteManagedAgentMutation();
@@ -276,6 +279,7 @@ export function UserProfilePanel({
     managedAgent === undefined;
   const isAgentActionPending =
     createAgentMutation.isPending ||
+    updateManagedAgentMutation.isPending ||
     startAgentMutation.isPending ||
     stopAgentMutation.isPending ||
     deleteAgentMutation.isPending ||
@@ -488,46 +492,25 @@ export function UserProfilePanel({
 
   const handleSubmitPersona = React.useCallback(
     async (input: CreatePersonaInput | UpdatePersonaInput) => {
-      try {
-        if ("id" in input) {
-          await updatePersonaMutation.mutateAsync(input);
-          toast.success(`Updated ${input.displayName}.`);
-        } else {
-          const persona = await createPersonaMutation.mutateAsync(input);
-          try {
-            const created = await createManagedAgentForPersona(persona);
-            if (created.spawnError) {
-              toast.error(
-                `${persona.displayName} was created, but it did not start: ${created.spawnError}`,
-              );
-            } else {
-              toast.success(`Created and started ${created.agent.name}.`);
-            }
-            if (created.profileSyncError) {
-              toast.warning(
-                `${created.agent.name} was created, but profile sync failed: ${created.profileSyncError}`,
-              );
-            }
-          } catch (error) {
-            toast.error(
-              error instanceof Error
-                ? `${persona.displayName} was created, but the agent instance could not be created: ${error.message}`
-                : `${persona.displayName} was created, but the agent instance could not be created.`,
-            );
-          }
-        }
-        setPersonaDialogState(null);
-        void personasQuery.refetch();
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Failed to save agent.",
-        );
-      }
+      await submitProfilePersonaDialog({
+        createManagedAgentForPersona,
+        createPersona: createPersonaMutation.mutateAsync,
+        input,
+        managedAgent,
+        onDone: () => {
+          setPersonaDialogState(null);
+          void personasQuery.refetch();
+        },
+        updateManagedAgent: updateManagedAgentMutation.mutateAsync,
+        updatePersona: updatePersonaMutation.mutateAsync,
+      });
     },
     [
       createPersonaMutation.mutateAsync,
       createManagedAgentForPersona,
+      managedAgent,
       personasQuery.refetch,
+      updateManagedAgentMutation.mutateAsync,
       updatePersonaMutation.mutateAsync,
     ],
   );
@@ -893,6 +876,7 @@ export function UserProfilePanel({
       isPending={
         createPersonaMutation.isPending ||
         updatePersonaMutation.isPending ||
+        updateManagedAgentMutation.isPending ||
         createAgentMutation.isPending
       }
       personaDialogState={personaDialogState}

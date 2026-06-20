@@ -934,7 +934,9 @@ pub(crate) async fn reconcile_agent_profile(
     let existing = query_agent_profile(state, &data.relay_url, agent_pubkey).await?;
 
     // Resolve the expected avatar — backfilling for legacy records that have no
-    // stored avatar_url yet.
+    // stored avatar_url yet. `None` is meaningful here: it means publish a
+    // profile with no picture, which clears retired built-in Fizz data URLs from
+    // the relay.
     let stored_avatar =
         filter_retired_fizz_avatar(data.persona_id.as_deref(), data.avatar_url.clone());
     let stored_avatar_was_retired_fizz = data
@@ -942,7 +944,7 @@ pub(crate) async fn reconcile_agent_profile(
         .as_deref()
         .is_some_and(|url| is_retired_fizz_data_url(data.persona_id.as_deref(), url));
     let expected_avatar = match stored_avatar {
-        Some(url) => url.to_string(),
+        Some(url) => Some(url.to_string()),
         None => {
             // Legacy record: the relay profile may have been corrupted by the
             // old reconciliation code (it overwrote the persona avatar with the
@@ -993,15 +995,15 @@ pub(crate) async fn reconcile_agent_profile(
                 }
             }
 
-            backfilled
+            if backfilled.is_empty() {
+                None
+            } else {
+                Some(backfilled)
+            }
         }
     };
 
-    if expected_avatar.is_empty() {
-        return Ok(());
-    }
-
-    if !profile_needs_sync(existing.as_ref(), &data.name, Some(&expected_avatar)) {
+    if !profile_needs_sync(existing.as_ref(), &data.name, expected_avatar.as_deref()) {
         return Ok(());
     }
 
@@ -1013,7 +1015,7 @@ pub(crate) async fn reconcile_agent_profile(
         &data.relay_url,
         &agent_keys,
         &data.name,
-        Some(&expected_avatar),
+        expected_avatar.as_deref(),
         data.auth_tag.as_deref(),
     )
     .await

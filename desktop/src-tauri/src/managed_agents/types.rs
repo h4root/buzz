@@ -230,6 +230,7 @@ pub struct ManagedAgentSummary {
     pub max_turn_duration_seconds: Option<u64>,
     pub parallelism: u32,
     pub system_prompt: Option<String>,
+    pub avatar_url: Option<String>,
     pub model: Option<String>,
     pub mcp_toolsets: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -424,6 +425,9 @@ pub struct UpdateManagedAgentRequest {
     /// Absent = don't touch. Present = rename the agent.
     #[serde(default)]
     pub name: Option<String>,
+    /// Absent = don't touch. null = clear. "url" = set.
+    #[serde(default)]
+    pub avatar_url: Option<Option<String>>,
     /// Absent = don't touch. null = clear to agent default. "id" = set.
     #[serde(default)]
     pub model: Option<Option<String>>,

@@ -17,6 +17,12 @@ use crate::{
     util::now_iso,
 };
 
+fn trim_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Query available models from an agent via `buzz-acp models --json`.
 ///
 /// Spawns a short-lived subprocess (no relay connection needed). The subprocess
@@ -139,7 +145,8 @@ pub async fn get_agent_models(
 ///
 /// Does NOT auto-restart the agent. Runtime config changes (system prompt,
 /// parallelism, commands, toolsets) take effect on the next agent spawn.
-/// Name changes are synced to the relay immediately via a kind:0 re-publish.
+/// Name and avatar changes are synced to the relay immediately via a kind:0
+/// re-publish.
 #[tauri::command]
 pub async fn update_managed_agent(
     input: UpdateManagedAgentRequest,
@@ -162,11 +169,19 @@ pub async fn update_managed_agent(
         let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
 
         let mut name_changed = false;
+        let mut avatar_changed = false;
         if let Some(name_update) = input.name {
             let trimmed = name_update.trim().to_string();
             if !trimmed.is_empty() && trimmed != record.name {
                 record.name = trimmed;
                 name_changed = true;
+            }
+        }
+        if let Some(avatar_update) = input.avatar_url {
+            let normalized = trim_optional(avatar_update);
+            if normalized != record.avatar_url {
+                record.avatar_url = normalized;
+                avatar_changed = true;
             }
         }
         if let Some(model_update) = input.model {
@@ -245,15 +260,19 @@ pub async fn update_managed_agent(
             .find(|r| r.pubkey == input.pubkey)
             .ok_or_else(|| format!("agent {} not found", input.pubkey))?;
 
-        let sync_params = if name_changed {
+        let sync_params = if name_changed || avatar_changed {
             let agent_keys = Keys::parse(&record.private_key_nsec)
                 .map_err(|e| format!("failed to parse agent keys: {e}"))?;
             let relay_url = record.relay_url.clone();
             let display_name = record.name.clone();
-            let avatar_url = record
-                .avatar_url
-                .clone()
-                .or_else(|| managed_agent_avatar_url(&record.agent_command));
+            let avatar_url = if avatar_changed {
+                record.avatar_url.clone()
+            } else {
+                record
+                    .avatar_url
+                    .clone()
+                    .or_else(|| managed_agent_avatar_url(&record.agent_command))
+            };
             let auth_tag = record.auth_tag.clone();
             Some((agent_keys, relay_url, display_name, avatar_url, auth_tag))
         } else {
