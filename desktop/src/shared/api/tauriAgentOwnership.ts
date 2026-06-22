@@ -1,48 +1,33 @@
-import { invokeTauri } from "@/shared/api/tauri";
 import { resolveOaOwner } from "@/shared/api/tauriIdentityArchive";
 
 export type AgentOwnershipStatus = {
   /** Lowercase hex pubkey of the queried agent. */
   agentPubkey: string;
-  /** Lowercase hex owner pubkey from relay `agent_owner_pubkey`, if set. */
+  /** Lowercase hex owner pubkey from the agent's live `kind:0` NIP-OA `auth` tag, if any. */
   ownerPubkey: string | null;
-  /** True iff the current workspace identity is the relay-recorded owner. */
+  /** True iff the current workspace identity is the verified kind:0 owner. */
   isOwner: boolean;
 };
 
-type RawAgentOwnershipStatus = {
-  agent_pubkey: string;
-  owner_pubkey: string | null;
-  is_owner: boolean;
-};
-
 /**
- * Resolve whether the current identity owns `agentPubkey` per relay DB.
- * Authoritative gate for observer activity visibility.
+ * Resolve whether the current identity owns `agentPubkey`.
+ *
+ * Authority is the agent's live `kind:0` NIP-OA `auth` tag, verified locally
+ * via {@link resolveOaOwner} — the same proof the relay now gates observer-frame
+ * delivery on. This is a thin wrapper that adapts {@link OwnerOfAgent} to the
+ * stable {@link AgentOwnershipStatus} shape consumed by `useCanViewAgentActivity`
+ * and `useChannelAgentSessions`.
+ *
+ * An agent with no kind:0, no `auth` tag, or a tag that fails verification
+ * resolves to `{ ownerPubkey: null, isOwner: false }`.
  */
 export async function resolveAgentOwnership(
   agentPubkey: string,
 ): Promise<AgentOwnershipStatus> {
-  try {
-    const raw = await invokeTauri<RawAgentOwnershipStatus>(
-      "resolve_agent_ownership",
-      { agentPubkey },
-    );
-    return {
-      agentPubkey: raw.agent_pubkey,
-      ownerPubkey: raw.owner_pubkey,
-      isOwner: raw.is_owner,
-    };
-  } catch (error) {
-    const owner = await resolveOaOwner(agentPubkey).catch(() => null);
-    if (!owner) {
-      throw error;
-    }
-
-    return {
-      agentPubkey: agentPubkey.toLowerCase(),
-      ownerPubkey: owner.owner,
-      isOwner: owner.isMe,
-    };
-  }
+  const owner = await resolveOaOwner(agentPubkey);
+  return {
+    agentPubkey: agentPubkey.toLowerCase(),
+    ownerPubkey: owner?.owner ?? null,
+    isOwner: owner?.isMe ?? false,
+  };
 }
