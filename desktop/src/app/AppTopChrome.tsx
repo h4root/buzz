@@ -21,6 +21,8 @@ type AppTopChromeProps = {
 
 const TOP_CHROME_ICON_BUTTON_CLASS =
   "h-7 w-7 rounded-[4px] text-muted-foreground/70 hover:bg-border/45 hover:text-foreground [&_svg]:size-4";
+const HISTORY_ICON_BUTTON_CLASS =
+  "h-7 w-6 rounded-[4px] text-muted-foreground/70 hover:bg-border/45 hover:text-foreground [&_svg]:size-4";
 const TOP_CHROME_WHEEL_GUARD_HEIGHT = 40;
 
 function TopChromeSidebarTrigger() {
@@ -91,7 +93,7 @@ export function AppTopChrome({
         <TopChromeSidebarTrigger />
         <Button
           aria-label="Go back"
-          className={TOP_CHROME_ICON_BUTTON_CLASS}
+          className={HISTORY_ICON_BUTTON_CLASS}
           data-testid="global-back"
           disabled={!canGoBack}
           onClick={onGoBack}
@@ -102,7 +104,7 @@ export function AppTopChrome({
         </Button>
         <Button
           aria-label="Go forward"
-          className={TOP_CHROME_ICON_BUTTON_CLASS}
+          className={HISTORY_ICON_BUTTON_CLASS}
           data-testid="global-forward"
           disabled={!canGoForward}
           onClick={onGoForward}
