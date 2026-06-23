@@ -13,9 +13,15 @@ const AgentsScreen = React.lazy(async () => {
   return { default: module.AgentsScreen };
 });
 
-/** Warms the AgentsScreen route chunk so first navigation doesn't stall. */
+// AgentsScreen wraps a SECOND lazy boundary (AgentsView), so warming the route
+// chunk alone still leaves AgentsView cold on first navigation. Warm both. The
+// dynamic import() keeps AgentsView in its own chunk; the loader dedupes
+// against AgentsScreen's own lazy import of the same module.
+/** Warms the AgentsScreen route chunk (and its inner AgentsView) so first
+ *  navigation doesn't stall. */
 export function preloadAgentsScreen(): void {
   void importAgentsScreen();
+  void import("@/features/agents/ui/AgentsView");
 }
 
 export const Route = createFileRoute("/agents")({

@@ -15,7 +15,7 @@ import {
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { buildDirectMessageIntro } from "@/features/channels/lib/dmParticipantDisplay";
 import {
-  buildVideoReviewCommentsByRootId,
+  buildVideoReviewCommentsForRoot,
   buildVideoReviewContextForMessage,
 } from "@/features/messages/lib/videoReviewContext";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
@@ -559,10 +559,6 @@ export const ChannelPane = React.memo(function ChannelPane({
 
     return messages.filter((message) => !isWelcomeSetupSystemMessage(message));
   }, [activeChannel, messages]);
-  const videoReviewCommentsByRootId = React.useMemo(
-    () => buildVideoReviewCommentsByRootId(messages),
-    [messages],
-  );
   const activeVideoReviewCommentSender = activeChannel?.archivedAt
     ? undefined
     : onSendVideoReviewComment;
@@ -575,7 +571,7 @@ export const ChannelPane = React.memo(function ChannelPane({
       channelId: activeChannel?.id ?? null,
       channelName: activeChannel?.name,
       channelType: activeChannel?.channelType ?? null,
-      comments: videoReviewCommentsByRootId.get(threadHeadMessage.id) ?? [],
+      comments: buildVideoReviewCommentsForRoot(messages, threadHeadMessage.id),
       isSendingVideoReviewComment: isSending,
       message: threadHeadMessage,
       onSendVideoReviewComment: activeVideoReviewCommentSender,
@@ -586,10 +582,10 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel,
     activeVideoReviewCommentSender,
     isSending,
+    messages,
     onToggleReaction,
     profiles,
     threadHeadMessage,
-    videoReviewCommentsByRootId,
   ]);
 
   const isOverlay = useIsThreadPanelOverlay();

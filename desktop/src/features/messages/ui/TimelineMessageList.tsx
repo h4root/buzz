@@ -12,11 +12,14 @@ import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import {
   buildVideoReviewCommentsByRootId,
   buildVideoReviewContextForMessage,
+  hasVideoAttachment,
 } from "@/features/messages/lib/videoReviewContext";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   type ListVirtualizer,
   VirtualizedList,
@@ -112,7 +115,10 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     [messages],
   );
   const reviewCommentsByRootId = React.useMemo(
-    () => buildVideoReviewCommentsByRootId(messages),
+    () =>
+      messages.some(hasVideoAttachment)
+        ? buildVideoReviewCommentsByRootId(messages)
+        : new Map<string, TimelineMessage[]>(),
     [messages],
   );
   // Contexts are memoized per message id so MessageRow/Markdown memo
@@ -154,6 +160,27 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     reviewCommentsByRootId,
   ]);
 
+  // Hoisted from MessageRow: both depend only on list-level data (agent
+  // pubkeys + profiles, and the channel list), so computing them per visible
+  // row was N_visible × redundant work on every mount. Memoized here so the
+  // references stay stable across unrelated re-renders — MessageRow is
+  // React.memo, and a fresh Set/array per render would defeat its comparator.
+  const resolvedAgentPubkeys = React.useMemo(() => {
+    const pubkeys = new Set(agentPubkeys ?? []);
+    for (const [pubkey, profile] of Object.entries(profiles ?? {})) {
+      if (profile.isAgent) {
+        pubkeys.add(normalizePubkey(pubkey));
+      }
+    }
+    return pubkeys;
+  }, [agentPubkeys, profiles]);
+
+  const { channels } = useChannelNavigation();
+  const channelNames = React.useMemo(
+    () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
+    [channels],
+  );
+
   // The flattened item stream and its messageId -> itemIndex map are produced
   // together from ONE memo, keyed on the entries and the unread boundary (the
   // unread divider is its own item, so it shifts indices). A separate memo with
@@ -192,6 +219,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
             <MessageRowItem
               agentPubkeys={agentPubkeys}
               channelId={channelId}
+              channelNames={channelNames}
               currentPubkey={currentPubkey}
               entry={item.entry}
               followThreadById={followThreadById}
@@ -204,6 +232,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               onReply={onReply}
               onToggleReaction={onToggleReaction}
               profiles={profiles}
+              resolvedAgentPubkeys={resolvedAgentPubkeys}
               searchActiveMessageId={searchActiveMessageId}
               searchMatchingMessageIds={searchMatchingMessageIds}
               searchQuery={searchQuery}
@@ -219,6 +248,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     [
       agentPubkeys,
       channelId,
+      channelNames,
       currentPubkey,
       followThreadById,
       highlightedMessageId,
@@ -230,6 +260,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       onReply,
       onToggleReaction,
       profiles,
+      resolvedAgentPubkeys,
       searchActiveMessageId,
       searchMatchingMessageIds,
       searchQuery,
@@ -297,14 +328,17 @@ type MessageRowItemProps = Pick<
   | "threadUnreadCounts"
   | "unfollowThreadById"
 > & {
+  channelNames: string[];
   entry: MainTimelineEntry;
   footer: React.ReactNode;
+  resolvedAgentPubkeys: ReadonlySet<string>;
   videoReviewContext: ReturnType<typeof buildVideoReviewContextForMessage>;
 };
 
 function MessageRowItem({
   agentPubkeys,
   channelId,
+  channelNames,
   currentPubkey,
   entry,
   followThreadById,
@@ -317,6 +351,7 @@ function MessageRowItem({
   onReply,
   onToggleReaction,
   profiles,
+  resolvedAgentPubkeys,
   searchActiveMessageId,
   searchMatchingMessageIds,
   searchQuery,
@@ -347,6 +382,7 @@ function MessageRowItem({
         <MessageRow
           agentPubkeys={agentPubkeys}
           channelId={channelId}
+          channelNames={channelNames}
           highlighted={false}
           hoverBackground={false}
           isFollowingThread={
@@ -369,6 +405,7 @@ function MessageRowItem({
               : undefined
           }
           profiles={profiles}
+          resolvedAgentPubkeys={resolvedAgentPubkeys}
           showDepthGuides={false}
           videoReviewContext={videoReviewContext}
         />
@@ -393,6 +430,7 @@ function MessageRowItem({
       <MessageRow
         agentPubkeys={agentPubkeys}
         channelId={channelId}
+        channelNames={channelNames}
         highlighted={message.id === highlightedMessageId || isSearchActive}
         message={message}
         onDelete={canDelete}
@@ -401,6 +439,7 @@ function MessageRowItem({
         onToggleReaction={onToggleReaction}
         onReply={onReply}
         profiles={profiles}
+        resolvedAgentPubkeys={resolvedAgentPubkeys}
         searchQuery={isSearchMatch ? searchQuery : undefined}
         showDepthGuides={false}
         videoReviewContext={videoReviewContext}

@@ -73,10 +73,16 @@ export const MessageRow = React.memo(
     searchQuery,
     showDepthGuides = true,
     agentPubkeys,
+    channelNames: channelNamesProp,
+    resolvedAgentPubkeys: resolvedAgentPubkeysProp,
     videoReviewContext,
   }: {
     agentPubkeys?: ReadonlySet<string>;
     channelId?: string | null;
+    /** Hoisted from the timeline list so it's computed once, not per row.
+     *  Omitted by callers (e.g. the thread panel) that render rows outside the
+     *  virtualized list — those fall back to the per-row context read. */
+    channelNames?: string[];
     collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
     connectDescendants?: boolean;
     depthGuideDepths?: ReadonlyArray<number>;
@@ -112,6 +118,9 @@ export const MessageRow = React.memo(
     onReply?: (message: TimelineMessage) => void;
     onUnfollowThread?: (message: TimelineMessage) => void;
     profiles?: UserProfileLookup;
+    /** Hoisted from the timeline list (computed once); falls back to a per-row
+     *  derivation when omitted. */
+    resolvedAgentPubkeys?: ReadonlySet<string>;
     searchQuery?: string;
     showDepthGuides?: boolean;
     videoReviewContext?: VideoReviewContext;
@@ -140,6 +149,10 @@ export const MessageRow = React.memo(
       [profiles, message.tags],
     );
     const resolvedAgentPubkeys = React.useMemo(() => {
+      if (resolvedAgentPubkeysProp) {
+        return resolvedAgentPubkeysProp;
+      }
+
       const pubkeys = new Set(agentPubkeys ?? []);
 
       for (const [pubkey, profile] of Object.entries(profiles ?? {})) {
@@ -149,7 +162,7 @@ export const MessageRow = React.memo(
       }
 
       return pubkeys;
-    }, [agentPubkeys, profiles]);
+    }, [agentPubkeys, profiles, resolvedAgentPubkeysProp]);
     const agentMentionPubkeysByName = React.useMemo(() => {
       if (!mentionPubkeysByName) {
         return undefined;
@@ -178,8 +191,10 @@ export const MessageRow = React.memo(
 
     const { channels } = useChannelNavigation();
     const channelNames = React.useMemo(
-      () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
-      [channels],
+      () =>
+        channelNamesProp ??
+        channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
+      [channelNamesProp, channels],
     );
 
     const indentPx = getThreadReplyIndentPx(message.depth);
@@ -747,6 +762,8 @@ export const MessageRow = React.memo(
       next.onCollapseDescendantsHoverChange &&
     prev.profiles === next.profiles &&
     prev.searchQuery === next.searchQuery &&
+    prev.channelNames === next.channelNames &&
+    prev.resolvedAgentPubkeys === next.resolvedAgentPubkeys &&
     prev.videoReviewContext === next.videoReviewContext,
 );
 

@@ -42,130 +42,153 @@ type InboxMessageRowProps = {
   ) => Promise<void>;
 };
 
-export function InboxMessageRow({
-  canReply,
-  channelId = null,
-  isFocusHighlightVisible,
-  message,
-  onSelectReplyTarget,
-  onToggleReaction,
-}: InboxMessageRowProps) {
-  const timelineMessage = React.useMemo(
-    () => toTimelineMessage(message),
-    [message],
-  );
-  const { customEmoji, emojiOnly } = useMessageEmoji(
-    message.content,
-    message.tags,
-  );
-  const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
-    null,
-  );
-  const {
-    reactions,
-    canToggle: canToggleReactions,
-    pending: reactionPending,
-    errorMessage: reactionErrorMessage,
-    select: handleReactionSelect,
-  } = useReactionHandler(timelineMessage, onToggleReaction);
+export const InboxMessageRow = React.memo(
+  function InboxMessageRow({
+    canReply,
+    channelId = null,
+    isFocusHighlightVisible,
+    message,
+    onSelectReplyTarget,
+    onToggleReaction,
+  }: InboxMessageRowProps) {
+    const timelineMessage = React.useMemo(
+      () => toTimelineMessage(message),
+      [message],
+    );
+    const { customEmoji, emojiOnly } = useMessageEmoji(
+      message.content,
+      message.tags,
+    );
+    const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
+      null,
+    );
+    const {
+      reactions,
+      canToggle: canToggleReactions,
+      pending: reactionPending,
+      errorMessage: reactionErrorMessage,
+      select: handleReactionSelect,
+    } = useReactionHandler(timelineMessage, onToggleReaction);
 
-  return (
-    <div className="relative px-5 py-2">
-      {message.isSelected ? (
-        <div
-          aria-hidden="true"
-          className={cn(
-            "pointer-events-none absolute inset-x-0 inset-y-1 transition-opacity duration-1000",
-            isFocusHighlightVisible
-              ? "bg-primary/[0.07] opacity-100"
-              : "bg-primary/[0.07] opacity-0",
-          )}
-        />
-      ) : null}
-      <article
-        className={cn(
-          "group/message relative flex items-start gap-2.5 px-0 py-0",
-          !message.isSelected && "hover:bg-muted/20",
-        )}
-        data-testid={
-          message.isSelected
-            ? "home-inbox-selected-message"
-            : "home-inbox-context-message"
-        }
-      >
-        {canReply || canToggleReactions ? (
-          <div className="absolute right-2 top-1 z-10 sm:top-0 sm:-translate-y-1/2">
-            <MessageActionBar
-              channelId={channelId}
-              message={timelineMessage}
-              onReactionSelect={
-                canToggleReactions ? handleReactionSelect : undefined
-              }
-              onReactionBadgeBurstRequest={
-                reactionPending ? undefined : setBadgeBurstEmoji
-              }
-              onReply={
-                canReply ? () => onSelectReplyTarget(message) : undefined
-              }
-              reactionErrorMessage={reactionErrorMessage}
-              reactions={reactions}
-            />
-          </div>
-        ) : null}
-
-        <div className="relative shrink-0">
-          <UserAvatar
-            avatarUrl={message.avatarUrl}
-            className="h-8 w-8 shrink-0"
-            displayName={message.authorLabel}
-            size="md"
+    return (
+      <div className="relative px-5 py-2">
+        {message.isSelected ? (
+          <div
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 inset-y-1 transition-opacity duration-1000",
+              isFocusHighlightVisible
+                ? "bg-primary/[0.07] opacity-100"
+                : "bg-primary/[0.07] opacity-0",
+            )}
           />
-        </div>
+        ) : null}
+        <article
+          className={cn(
+            "group/message relative flex items-start gap-2.5 px-0 py-0",
+            !message.isSelected && "hover:bg-muted/20",
+          )}
+          data-testid={
+            message.isSelected
+              ? "home-inbox-selected-message"
+              : "home-inbox-context-message"
+          }
+        >
+          {canReply || canToggleReactions ? (
+            <div className="absolute right-2 top-1 z-10 sm:top-0 sm:-translate-y-1/2">
+              <MessageActionBar
+                channelId={channelId}
+                message={timelineMessage}
+                onReactionSelect={
+                  canToggleReactions ? handleReactionSelect : undefined
+                }
+                onReactionBadgeBurstRequest={
+                  reactionPending ? undefined : setBadgeBurstEmoji
+                }
+                onReply={
+                  canReply ? () => onSelectReplyTarget(message) : undefined
+                }
+                reactionErrorMessage={reactionErrorMessage}
+                reactions={reactions}
+              />
+            </div>
+          ) : null}
 
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0">
-            <p className="truncate text-sm font-semibold text-foreground">
-              {message.authorLabel}
-            </p>
-            <p className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground/55">
-              {message.fullTimestampLabel}
-            </p>
+          <div className="relative shrink-0">
+            <UserAvatar
+              avatarUrl={message.avatarUrl}
+              className="h-8 w-8 shrink-0"
+              displayName={message.authorLabel}
+              size="md"
+            />
           </div>
 
-          <div className="mt-0.5">
-            <Markdown
-              className={cn(
-                "max-w-full text-left text-sm text-foreground",
-                emojiOnly &&
-                  "text-4xl leading-tight [&_p]:leading-tight [&_img[data-custom-emoji]]:h-[1.45em] [&_img[data-custom-emoji]]:align-middle [&_button:has(img[data-custom-emoji])]:align-middle",
-              )}
-              content={message.content}
-              customEmoji={customEmoji}
-              mentionNames={message.mentionNames}
-            />
-            <MessageReactions
-              canToggle={canToggleReactions}
-              messageId={message.id}
-              onSelect={(emoji) => {
-                void handleReactionSelect(emoji);
-              }}
-              burstEmojiOnRender={badgeBurstEmoji}
-              onBurstEmojiRendered={(emoji) => {
-                setBadgeBurstEmoji((current) =>
-                  current === emoji ? null : current,
-                );
-              }}
-              pending={reactionPending}
-              reactions={reactions}
-            />
-            {reactionErrorMessage ? (
-              <p className="mt-1.5 text-xs text-destructive">
-                {reactionErrorMessage}
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0">
+              <p className="truncate text-sm font-semibold text-foreground">
+                {message.authorLabel}
               </p>
-            ) : null}
+              <p className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground/55">
+                {message.fullTimestampLabel}
+              </p>
+            </div>
+
+            <div className="mt-0.5">
+              <Markdown
+                className={cn(
+                  "max-w-full text-left text-sm text-foreground",
+                  emojiOnly &&
+                    "text-4xl leading-tight [&_p]:leading-tight [&_img[data-custom-emoji]]:h-[1.45em] [&_img[data-custom-emoji]]:align-middle [&_button:has(img[data-custom-emoji])]:align-middle",
+                )}
+                content={message.content}
+                customEmoji={customEmoji}
+                mentionNames={message.mentionNames}
+              />
+              <MessageReactions
+                canToggle={canToggleReactions}
+                messageId={message.id}
+                onSelect={(emoji) => {
+                  void handleReactionSelect(emoji);
+                }}
+                burstEmojiOnRender={badgeBurstEmoji}
+                onBurstEmojiRendered={(emoji) => {
+                  setBadgeBurstEmoji((current) =>
+                    current === emoji ? null : current,
+                  );
+                }}
+                pending={reactionPending}
+                reactions={reactions}
+              />
+              {reactionErrorMessage ? (
+                <p className="mt-1.5 text-xs text-destructive">
+                  {reactionErrorMessage}
+                </p>
+              ) : null}
+            </div>
           </div>
-        </div>
-      </article>
-    </div>
-  );
-}
+        </article>
+      </div>
+    );
+  },
+  (prev, next) =>
+    // Callbacks (onSelectReplyTarget, onToggleReaction) intentionally
+    // excluded: the parent (HomeView) recreates them as inline arrows every
+    // render, so including them would defeat the memo. They're invoked on
+    // interaction, never read during render. Compare the content-bearing
+    // message fields (displayMessages is rebuilt unmemoized upstream, so a
+    // reference check on `message` would never bite for pending replies).
+    prev.canReply === next.canReply &&
+    prev.channelId === next.channelId &&
+    prev.isFocusHighlightVisible === next.isFocusHighlightVisible &&
+    prev.message.id === next.message.id &&
+    prev.message.content === next.message.content &&
+    prev.message.avatarUrl === next.message.avatarUrl &&
+    prev.message.authorLabel === next.message.authorLabel &&
+    prev.message.fullTimestampLabel === next.message.fullTimestampLabel &&
+    prev.message.isSelected === next.message.isSelected &&
+    prev.message.reactions === next.message.reactions &&
+    prev.message.tags === next.message.tags &&
+    prev.message.mentionNames === next.message.mentionNames,
+);
+
+InboxMessageRow.displayName = "InboxMessageRow";

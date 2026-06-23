@@ -180,218 +180,246 @@ export function AgentsView() {
         </div>
       </div>
 
-      <CreateAgentDialog
-        onCreated={(result) => {
-          agents.setLogAgentPubkey(result.agent.pubkey);
-          agents.setCreatedAgent(result);
-        }}
-        onOpenChange={agents.setIsCreateOpen}
-        open={agents.isCreateOpen}
-      />
-      <AddAgentToChannelDialog
-        agent={agents.agentToAddToChannel}
-        onAdded={agents.handleAddedToChannel}
-        onOpenChange={(open) => {
-          if (!open) {
-            agents.setAgentToAddToChannel(null);
+      {agents.isCreateOpen && (
+        <CreateAgentDialog
+          onCreated={(result) => {
+            agents.setLogAgentPubkey(result.agent.pubkey);
+            agents.setCreatedAgent(result);
+          }}
+          onOpenChange={agents.setIsCreateOpen}
+          open={agents.isCreateOpen}
+        />
+      )}
+      {agents.agentToAddToChannel !== null && (
+        <AddAgentToChannelDialog
+          agent={agents.agentToAddToChannel}
+          onAdded={agents.handleAddedToChannel}
+          onOpenChange={(open) => {
+            if (!open) {
+              agents.setAgentToAddToChannel(null);
+            }
+          }}
+          open={agents.agentToAddToChannel !== null}
+        />
+      )}
+      {agents.createdAgent !== null && (
+        <SecretRevealDialog
+          created={agents.createdAgent}
+          onOpenChange={(open) => {
+            if (!open) {
+              agents.setCreatedAgent(null);
+            }
+          }}
+        />
+      )}
+      {personas.personaDialogState !== null && (
+        <PersonaDialog
+          description={personas.personaDialogState?.description ?? ""}
+          error={
+            personas.updatePersonaMutation.error instanceof Error
+              ? personas.updatePersonaMutation.error
+              : personas.createPersonaMutation.error instanceof Error
+                ? personas.createPersonaMutation.error
+                : null
           }
-        }}
-        open={agents.agentToAddToChannel !== null}
-      />
-      <SecretRevealDialog
-        created={agents.createdAgent}
-        onOpenChange={(open) => {
-          if (!open) {
-            agents.setCreatedAgent(null);
+          initialValues={personas.personaDialogState?.initialValues ?? null}
+          isImportPending={
+            personas.personaImportActions.isApplyingPersonaImportUpdate
           }
-        }}
-      />
-      <PersonaDialog
-        description={personas.personaDialogState?.description ?? ""}
-        error={
-          personas.updatePersonaMutation.error instanceof Error
-            ? personas.updatePersonaMutation.error
-            : personas.createPersonaMutation.error instanceof Error
-              ? personas.createPersonaMutation.error
+          isPending={
+            personas.createPersonaMutation.isPending ||
+            personas.updatePersonaMutation.isPending
+          }
+          runtimes={personas.acpRuntimesQuery.data ?? []}
+          runtimesLoading={personas.acpRuntimesQuery.isLoading}
+          onImportUpdateFile={
+            personas.personaImportActions.handleEditDialogImportUpdateFile
+          }
+          onOpenChange={(open) => {
+            if (!open) {
+              personas.setPersonaDialogState(null);
+            }
+          }}
+          onSubmit={personas.handleSubmit}
+          open={personas.personaDialogState !== null}
+          submitLabel={personas.personaDialogState?.submitLabel ?? "Save"}
+          title={personas.personaDialogState?.title ?? "Persona"}
+        />
+      )}
+      {personas.personaToDelete !== null && (
+        <PersonaDeleteDialog
+          onConfirm={(persona) => {
+            void personas.handleDelete(persona);
+          }}
+          onOpenChange={(open) => {
+            if (!open) {
+              personas.setPersonaToDelete(null);
+            }
+          }}
+          open={personas.personaToDelete !== null}
+          persona={personas.personaToDelete}
+        />
+      )}
+      {personas.isCatalogDialogOpen && (
+        <PersonaCatalogDialog
+          error={
+            personas.personasQuery.error instanceof Error
+              ? personas.personasQuery.error
               : null
-        }
-        initialValues={personas.personaDialogState?.initialValues ?? null}
-        isImportPending={
-          personas.personaImportActions.isApplyingPersonaImportUpdate
-        }
-        isPending={
-          personas.createPersonaMutation.isPending ||
-          personas.updatePersonaMutation.isPending
-        }
-        runtimes={personas.acpRuntimesQuery.data ?? []}
-        runtimesLoading={personas.acpRuntimesQuery.isLoading}
-        onImportUpdateFile={
-          personas.personaImportActions.handleEditDialogImportUpdateFile
-        }
-        onOpenChange={(open) => {
-          if (!open) {
-            personas.setPersonaDialogState(null);
           }
-        }}
-        onSubmit={personas.handleSubmit}
-        open={personas.personaDialogState !== null}
-        submitLabel={personas.personaDialogState?.submitLabel ?? "Save"}
-        title={personas.personaDialogState?.title ?? "Persona"}
-      />
-      <PersonaDeleteDialog
-        onConfirm={(persona) => {
-          void personas.handleDelete(persona);
-        }}
-        onOpenChange={(open) => {
-          if (!open) {
-            personas.setPersonaToDelete(null);
-          }
-        }}
-        open={personas.personaToDelete !== null}
-        persona={personas.personaToDelete}
-      />
-      <PersonaCatalogDialog
-        error={
-          personas.personasQuery.error instanceof Error
-            ? personas.personasQuery.error
-            : null
-        }
-        feedbackErrorMessage={
-          personas.personaFeedbackSurface === "catalog"
-            ? personas.personaErrorMessage
-            : null
-        }
-        feedbackNoticeMessage={
-          personas.personaFeedbackSurface === "catalog"
-            ? personas.personaNoticeMessage
-            : null
-        }
-        isLoading={personas.personasQuery.isLoading}
-        isPending={personas.setPersonaActiveMutation.isPending}
-        onClearFeedback={() => {
-          personas.clearFeedback("catalog");
-        }}
-        onOpenChange={personas.setIsCatalogDialogOpen}
-        onSelectPersona={(persona, active) => {
-          void personas.handleSetActive(persona, active, "catalog");
-        }}
-        open={personas.isCatalogDialogOpen}
-        personas={personas.catalogPersonas}
-      />
-      <TeamDialog
-        description={teamActions.teamDialogState?.description ?? ""}
-        error={
-          teamActions.updateTeamMutation.error instanceof Error
-            ? teamActions.updateTeamMutation.error
-            : teamActions.createTeamMutation.error instanceof Error
-              ? teamActions.createTeamMutation.error
+          feedbackErrorMessage={
+            personas.personaFeedbackSurface === "catalog"
+              ? personas.personaErrorMessage
               : null
-        }
-        initialValues={teamActions.teamDialogState?.initialValues ?? null}
-        isImportPending={teamActions.isApplyingTeamImportUpdate}
-        isPending={
-          teamActions.createTeamMutation.isPending ||
-          teamActions.updateTeamMutation.isPending
-        }
-        onImportUpdateFile={teamActions.handleEditDialogImportUpdateFile}
-        onOpenChange={(open) => {
-          if (!open) {
-            teamActions.setTeamDialogState(null);
           }
-        }}
-        onDeleteRemovedPersonas={teamActions.handleDeleteRemovedPersonas}
-        onSubmit={teamActions.handleTeamSubmit}
-        open={teamActions.teamDialogState !== null}
-        personas={personas.libraryPersonas}
-        submitLabel={teamActions.teamDialogState?.submitLabel ?? "Save"}
-        title={teamActions.teamDialogState?.title ?? "Team"}
-      />
-      <TeamDeleteDialog
-        onConfirm={(team) => {
-          void teamActions.handleDeleteTeam(team);
-        }}
-        onOpenChange={(open) => {
-          if (!open) {
-            teamActions.setTeamToDelete(null);
+          feedbackNoticeMessage={
+            personas.personaFeedbackSurface === "catalog"
+              ? personas.personaNoticeMessage
+              : null
           }
-        }}
-        open={teamActions.teamToDelete !== null}
-        team={teamActions.teamToDelete}
-      />
-      <AddTeamToChannelDialog
-        onDeployed={teamActions.handleTeamDeployed}
-        onOpenChange={(open) => {
-          if (!open) {
-            teamActions.setTeamToAddToChannel(null);
+          isLoading={personas.personasQuery.isLoading}
+          isPending={personas.setPersonaActiveMutation.isPending}
+          onClearFeedback={() => {
+            personas.clearFeedback("catalog");
+          }}
+          onOpenChange={personas.setIsCatalogDialogOpen}
+          onSelectPersona={(persona, active) => {
+            void personas.handleSetActive(persona, active, "catalog");
+          }}
+          open={personas.isCatalogDialogOpen}
+          personas={personas.catalogPersonas}
+        />
+      )}
+      {teamActions.teamDialogState !== null && (
+        <TeamDialog
+          description={teamActions.teamDialogState?.description ?? ""}
+          error={
+            teamActions.updateTeamMutation.error instanceof Error
+              ? teamActions.updateTeamMutation.error
+              : teamActions.createTeamMutation.error instanceof Error
+                ? teamActions.createTeamMutation.error
+                : null
           }
-        }}
-        open={teamActions.teamToAddToChannel !== null}
-        personas={personas.libraryPersonas}
-        team={teamActions.teamToAddToChannel}
-      />
-      <BatchImportDialog
-        fileName={personas.batchImportFileName}
-        onComplete={personas.handleBatchImportComplete}
-        onOpenChange={(open) => {
-          if (!open) {
-            personas.setBatchImportResult(null);
+          initialValues={teamActions.teamDialogState?.initialValues ?? null}
+          isImportPending={teamActions.isApplyingTeamImportUpdate}
+          isPending={
+            teamActions.createTeamMutation.isPending ||
+            teamActions.updateTeamMutation.isPending
           }
-        }}
-        open={personas.batchImportResult !== null}
-        result={personas.batchImportResult}
-      />
-      <TeamImportDialog
-        fileName={teamActions.teamImportPreview?.fileName ?? ""}
-        onComplete={teamActions.handleTeamImportComplete}
-        onOpenChange={(open) => {
-          if (!open) {
-            teamActions.setTeamImportPreview(null);
+          onImportUpdateFile={teamActions.handleEditDialogImportUpdateFile}
+          onOpenChange={(open) => {
+            if (!open) {
+              teamActions.setTeamDialogState(null);
+            }
+          }}
+          onDeleteRemovedPersonas={teamActions.handleDeleteRemovedPersonas}
+          onSubmit={teamActions.handleTeamSubmit}
+          open={teamActions.teamDialogState !== null}
+          personas={personas.libraryPersonas}
+          submitLabel={teamActions.teamDialogState?.submitLabel ?? "Save"}
+          title={teamActions.teamDialogState?.title ?? "Team"}
+        />
+      )}
+      {teamActions.teamToDelete !== null && (
+        <TeamDeleteDialog
+          onConfirm={(team) => {
+            void teamActions.handleDeleteTeam(team);
+          }}
+          onOpenChange={(open) => {
+            if (!open) {
+              teamActions.setTeamToDelete(null);
+            }
+          }}
+          open={teamActions.teamToDelete !== null}
+          team={teamActions.teamToDelete}
+        />
+      )}
+      {teamActions.teamToAddToChannel !== null && (
+        <AddTeamToChannelDialog
+          onDeployed={teamActions.handleTeamDeployed}
+          onOpenChange={(open) => {
+            if (!open) {
+              teamActions.setTeamToAddToChannel(null);
+            }
+          }}
+          open={teamActions.teamToAddToChannel !== null}
+          personas={personas.libraryPersonas}
+          team={teamActions.teamToAddToChannel}
+        />
+      )}
+      {personas.batchImportResult !== null && (
+        <BatchImportDialog
+          fileName={personas.batchImportFileName}
+          onComplete={personas.handleBatchImportComplete}
+          onOpenChange={(open) => {
+            if (!open) {
+              personas.setBatchImportResult(null);
+            }
+          }}
+          open={personas.batchImportResult !== null}
+          result={personas.batchImportResult}
+        />
+      )}
+      {teamActions.teamImportPreview !== null && (
+        <TeamImportDialog
+          fileName={teamActions.teamImportPreview?.fileName ?? ""}
+          onComplete={teamActions.handleTeamImportComplete}
+          onOpenChange={(open) => {
+            if (!open) {
+              teamActions.setTeamImportPreview(null);
+            }
+          }}
+          open={teamActions.teamImportPreview !== null}
+          preview={teamActions.teamImportPreview?.preview ?? null}
+        />
+      )}
+      {teamActions.teamImportTarget !== null && (
+        <TeamImportUpdateDialog
+          fileName={teamActions.teamImportTargetPreview?.fileName ?? ""}
+          isPending={
+            teamActions.isApplyingTeamImportUpdate ||
+            teamActions.updateTeamMutation.isPending
           }
-        }}
-        open={teamActions.teamImportPreview !== null}
-        preview={teamActions.teamImportPreview?.preview ?? null}
-      />
-      <TeamImportUpdateDialog
-        fileName={teamActions.teamImportTargetPreview?.fileName ?? ""}
-        isPending={
-          teamActions.isApplyingTeamImportUpdate ||
-          teamActions.updateTeamMutation.isPending
-        }
-        onApply={teamActions.handleTeamImportUpdateApply}
-        onClear={teamActions.clearImportUpdateAndReturnToEdit}
-        onOpenChange={(open) => {
-          if (!open) {
-            teamActions.closeImportUpdateDialog();
+          onApply={teamActions.handleTeamImportUpdateApply}
+          onClear={teamActions.clearImportUpdateAndReturnToEdit}
+          onOpenChange={(open) => {
+            if (!open) {
+              teamActions.closeImportUpdateDialog();
+            }
+          }}
+          open={teamActions.teamImportTarget !== null}
+          personas={personas.libraryPersonas}
+          preview={teamActions.teamImportTargetPreview?.preview ?? null}
+          team={teamActions.teamImportTarget}
+        />
+      )}
+      {personas.personaImportActions.personaImportTarget !== null && (
+        <PersonaImportUpdateDialog
+          fileName={
+            personas.personaImportActions.personaImportTargetPreview
+              ?.fileName ?? ""
           }
-        }}
-        open={teamActions.teamImportTarget !== null}
-        personas={personas.libraryPersonas}
-        preview={teamActions.teamImportTargetPreview?.preview ?? null}
-        team={teamActions.teamImportTarget}
-      />
-      <PersonaImportUpdateDialog
-        fileName={
-          personas.personaImportActions.personaImportTargetPreview?.fileName ??
-          ""
-        }
-        isPending={
-          personas.personaImportActions.isApplyingPersonaImportUpdate ||
-          personas.updatePersonaMutation.isPending
-        }
-        onApply={personas.personaImportActions.handleImportUpdateApply}
-        onClear={personas.personaImportActions.clearImportUpdateAndReturnToEdit}
-        onOpenChange={(open) => {
-          if (!open) {
-            personas.personaImportActions.closeImportUpdateDialog();
+          isPending={
+            personas.personaImportActions.isApplyingPersonaImportUpdate ||
+            personas.updatePersonaMutation.isPending
           }
-        }}
-        open={personas.personaImportActions.personaImportTarget !== null}
-        persona={personas.personaImportActions.personaImportTarget}
-        preview={
-          personas.personaImportActions.personaImportTargetPreview?.preview ??
-          null
-        }
-      />
+          onApply={personas.personaImportActions.handleImportUpdateApply}
+          onClear={
+            personas.personaImportActions.clearImportUpdateAndReturnToEdit
+          }
+          onOpenChange={(open) => {
+            if (!open) {
+              personas.personaImportActions.closeImportUpdateDialog();
+            }
+          }}
+          open={personas.personaImportActions.personaImportTarget !== null}
+          persona={personas.personaImportActions.personaImportTarget}
+          preview={
+            personas.personaImportActions.personaImportTargetPreview?.preview ??
+            null
+          }
+        />
+      )}
     </>
   );
 }
