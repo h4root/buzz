@@ -42,6 +42,15 @@ fn sub_id(name: &str) -> String {
     format!("e2e-{name}-{}", uuid::Uuid::new_v4())
 }
 
+/// The search backend the relay-under-test is configured with, surfaced to the
+/// test process via `BUZZ_TEST_BACKEND` (`typesense` | `postgres` | `disabled`).
+/// The matrix runner sets this to match the relay's `BUZZ_SEARCH_BACKEND`.
+/// Backend-specific tests early-return when it does not match, so the same
+/// suite is safe to run against any backend.
+fn test_backend() -> String {
+    std::env::var("BUZZ_TEST_BACKEND").unwrap_or_else(|_| "postgres".to_string())
+}
+
 /// Create a real channel in the DB via REST so the relay accepts events for it.
 async fn create_test_channel(keys: &Keys) -> String {
     create_channel_with_visibility(keys, "open").await
@@ -361,6 +370,75 @@ async fn test_nip50_search_returns_results_and_eose() {
             // Any other error (e.g. connection closed) is also acceptable here.
         }
     }
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// Gate #2 — `BUZZ_SEARCH_BACKEND=disabled` fails closed.
+///
+/// Posts a message that the postgres/typesense backends provably return (it is
+/// the exact same setup as `test_nip50_search_returns_results_and_eose`), then
+/// asserts the relay delivers EOSE with **zero** events. A disabled backend must
+/// never leak content: NIP-50 search returns empty for every query, regardless
+/// of how well it would otherwise match.
+///
+/// Only meaningful against a relay configured with the disabled backend, so it
+/// early-returns (skips) unless `BUZZ_TEST_BACKEND=disabled`. The matrix runner
+/// sets that env to match the relay's `BUZZ_SEARCH_BACKEND`.
+#[tokio::test]
+#[ignore]
+async fn test_nip50_search_disabled_fails_closed() {
+    if test_backend() != "disabled" {
+        eprintln!(
+            "skipping test_nip50_search_disabled_fails_closed: BUZZ_TEST_BACKEND={} (need `disabled`)",
+            test_backend()
+        );
+        return;
+    }
+
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
+
+    // Post a message that WOULD match under a real backend — same shape as the
+    // positive "returns results" test, so a non-empty result here would prove a
+    // working index, and an empty result proves the disabled backend held closed.
+    let unique_token = format!("searchtoken_{}", uuid::Uuid::new_v4().simple());
+    let content = format!("Hello world {unique_token}");
+
+    let mut client = BuzzTestClient::connect(&url, &keys).await.expect("connect");
+
+    let ok = client
+        .send_text_message(&keys, &channel, &content, 9)
+        .await
+        .expect("send message");
+    assert!(ok.accepted, "relay rejected message: {}", ok.message);
+
+    // Generous settle window — under a real backend this is when indexing lands.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let sid = sub_id("nip50-disabled");
+    let filter = Filter::new()
+        .kind(Kind::Custom(9))
+        .search(&unique_token)
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+
+    client
+        .subscribe(&sid, vec![filter])
+        .await
+        .expect("subscribe");
+
+    let events = client
+        .collect_until_eose(&sid, Duration::from_secs(10))
+        .await
+        .expect("collect until EOSE");
+
+    assert!(
+        events.is_empty(),
+        "disabled backend returned {} search hit(s) — search did NOT fail closed. events: {:?}",
+        events.len(),
+        events.iter().map(|e| &e.content).collect::<Vec<_>>()
+    );
 
     client.disconnect().await.expect("disconnect");
 }
