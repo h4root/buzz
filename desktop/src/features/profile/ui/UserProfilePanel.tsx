@@ -346,12 +346,12 @@ export function UserProfilePanel({
   }, [effectivePubkey, onClose, onOpenDm]);
 
   const handleEditAgent = React.useCallback(() => {
-    if (resolvedPersona && !resolvedPersona.isBuiltIn) {
+    if (managedAgent) {
+      setEditAgentOpen(true);
+    } else if (resolvedPersona && !resolvedPersona.isBuiltIn) {
       setPersonaDialogState(editPersonaDialogState(resolvedPersona));
-      return;
     }
-    setEditAgentOpen(true);
-  }, [resolvedPersona]);
+  }, [managedAgent, resolvedPersona]);
 
   const { deleteManagedAgentRecord, deleteManagedAgentsForPersona } =
     useProfileAgentDeletion({
@@ -513,6 +513,7 @@ export function UserProfilePanel({
         createPersona: createPersonaMutation.mutateAsync,
         input,
         managedAgent,
+        onCreatedAgent: setCreatedAgent,
         onDone: () => {
           setPersonaDialogState(null);
           void personasQuery.refetch();
@@ -527,6 +528,7 @@ export function UserProfilePanel({
       createPersonaMutation.mutateAsync,
       createManagedAgentForPersona,
       managedAgent,
+      setCreatedAgent,
       personasQuery.refetch,
       resolvedPersona,
       acpRuntimesQuery.data,

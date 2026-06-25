@@ -18,6 +18,7 @@ type SubmitProfilePersonaDialogOptions = {
   createPersona: (input: CreatePersonaInput) => Promise<AgentPersona>;
   input: CreatePersonaInput | UpdatePersonaInput;
   managedAgent: ManagedAgent | undefined;
+  onCreatedAgent?: (created: CreateManagedAgentResponse) => void;
   onDone: () => void;
   previousPersona?: AgentPersona;
   runtimes?: readonly AcpRuntimeCatalogEntry[];
@@ -71,6 +72,7 @@ export async function submitProfilePersonaDialog({
   createPersona,
   input,
   managedAgent,
+  onCreatedAgent,
   onDone,
   previousPersona,
   runtimes,
@@ -108,6 +110,7 @@ export async function submitProfilePersonaDialog({
       const persona = await createPersona(input);
       try {
         const created = await createManagedAgentForPersona(persona);
+        onCreatedAgent?.(created);
         if (created.spawnError) {
           toast.error(
             `${persona.displayName} was created, but it did not start: ${created.spawnError}`,

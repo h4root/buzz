@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateLinkedAgentRuntimeEdit } from "./UserProfilePanelPersonaSubmit.ts";
+import {
+  submitProfilePersonaDialog,
+  validateLinkedAgentRuntimeEdit,
+} from "./UserProfilePanelPersonaSubmit.ts";
 
 function agent(overrides = {}) {
   return {
@@ -66,6 +69,19 @@ function updateInput(overrides = {}) {
     avatarUrl: undefined,
     systemPrompt: "Prompt",
     runtime: "claude",
+    model: undefined,
+    provider: undefined,
+    namePool: [],
+    ...overrides,
+  };
+}
+
+function createInput(overrides = {}) {
+  return {
+    displayName: "Fizz",
+    avatarUrl: undefined,
+    systemPrompt: "Prompt",
+    runtime: "goose",
     model: undefined,
     provider: undefined,
     namePool: [],
@@ -147,4 +163,37 @@ test("validateLinkedAgentRuntimeEdit allows clearing linked runtime preference",
     }),
     null,
   );
+});
+
+test("submitProfilePersonaDialog reports created agents for secret reveal", async () => {
+  const createdAgent = {
+    agent: agent({ name: "Fizz Prime" }),
+    privateKeyNsec: "nsec1secret",
+    profileSyncError: null,
+    spawnError: null,
+  };
+  let revealedAgent = null;
+  let done = false;
+
+  await submitProfilePersonaDialog({
+    createManagedAgentForPersona: async () => createdAgent,
+    createPersona: async () => persona({ displayName: "Fizz Prime" }),
+    input: createInput({ displayName: "Fizz Prime" }),
+    managedAgent: undefined,
+    onCreatedAgent: (created) => {
+      revealedAgent = created;
+    },
+    onDone: () => {
+      done = true;
+    },
+    updateManagedAgent: async () => {
+      throw new Error("updateManagedAgent should not be called");
+    },
+    updatePersona: async () => {
+      throw new Error("updatePersona should not be called");
+    },
+  });
+
+  assert.equal(revealedAgent, createdAgent);
+  assert.equal(done, true);
 });
