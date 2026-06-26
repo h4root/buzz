@@ -213,7 +213,10 @@ pub struct AppState {
     /// Events fanned out in-process are added here; the Redis subscriber
     /// consumer skips them to avoid double delivery. Entries expire after
     /// 60 seconds via moka's TTL eviction — bounded regardless of subscriber health.
-    pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
+    /// Keyed by `(community_id, event_id)`: the same signed event can legitimately
+    /// exist in two communities, so keying on `event_id` alone would let an A-local
+    /// write suppress a B Redis echo (cross-community echo-suppression bug).
+    pub local_event_ids: Arc<moka::sync::Cache<(buzz_core::CommunityId, [u8; 32]), ()>>,
     /// Membership cache: (channel_id, pubkey_bytes) → is_member.
     /// Short TTL (10s) — membership changes are rare but must propagate.
     /// Multi-pod: other pods rely on TTL expiry; only local caches are invalidated.
@@ -427,8 +430,9 @@ impl AppState {
 
     /// Record an event ID as locally-published for dedup.
     /// Called before Redis publish so the multi-node consumer can skip the echo.
-    pub fn mark_local_event(&self, event_id: &nostr::EventId) {
-        self.local_event_ids.insert(event_id.to_bytes(), ());
+    pub fn mark_local_event(&self, ctx: &buzz_core::TenantContext, event_id: &nostr::EventId) {
+        self.local_event_ids
+            .insert((ctx.community(), event_id.to_bytes()), ());
     }
 
     /// Check channel membership with a 10-second cache. Falls back to DB on miss.
@@ -454,12 +458,20 @@ impl AppState {
     /// to every other pod over Redis (see [`apply_cache_invalidation`]). The
     /// publish is spawned, not awaited: the local drop is already done, and a
     /// dropped publish is backstopped by the REQ denial-path DB confirmation.
-    pub fn invalidate_membership(&self, channel_id: Uuid, pubkey: &[u8]) {
+    pub fn invalidate_membership(
+        &self,
+        ctx: &buzz_core::TenantContext,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) {
         self.invalidate_membership_local(channel_id, pubkey);
-        self.spawn_cache_invalidation(CacheInvalidation::Membership {
-            channel_id,
-            pubkey: pubkey.to_vec(),
-        });
+        self.spawn_cache_invalidation(
+            ctx,
+            CacheInvalidation::Membership {
+                channel_id,
+                pubkey: pubkey.to_vec(),
+            },
+        );
     }
 
     /// Local-only membership drop. The cross-pod consumer calls this directly so
@@ -471,9 +483,9 @@ impl AppState {
     }
 
     /// Invalidate all users' accessible-channels cache (e.g. new open channel created).
-    pub fn invalidate_all_accessible_channels(&self) {
+    pub fn invalidate_all_accessible_channels(&self, ctx: &buzz_core::TenantContext) {
         self.invalidate_all_accessible_channels_local();
-        self.spawn_cache_invalidation(CacheInvalidation::AccessibleAll);
+        self.spawn_cache_invalidation(ctx, CacheInvalidation::AccessibleAll);
     }
 
     /// Local-only accessible-channels drop. See [`invalidate_membership_local`].
@@ -482,9 +494,9 @@ impl AppState {
     }
 
     /// Invalidate the cached visibility for a single channel (e.g. after a flip).
-    pub fn invalidate_channel_visibility(&self, channel_id: Uuid) {
+    pub fn invalidate_channel_visibility(&self, ctx: &buzz_core::TenantContext, channel_id: Uuid) {
         self.invalidate_channel_visibility_local(channel_id);
-        self.spawn_cache_invalidation(CacheInvalidation::Visibility { channel_id });
+        self.spawn_cache_invalidation(ctx, CacheInvalidation::Visibility { channel_id });
     }
 
     /// Local-only visibility drop. See [`invalidate_membership_local`].
@@ -498,9 +510,9 @@ impl AppState {
     /// cache because moka doesn't support prefix-based invalidation on composite
     /// keys, and stale `is_member=true` entries for a deleted channel would bypass
     /// the DB's `deleted_at IS NULL` guard.
-    pub fn invalidate_channel_deleted(&self) {
+    pub fn invalidate_channel_deleted(&self, ctx: &buzz_core::TenantContext) {
         self.invalidate_channel_deleted_local();
-        self.spawn_cache_invalidation(CacheInvalidation::ChannelDeleted);
+        self.spawn_cache_invalidation(ctx, CacheInvalidation::ChannelDeleted);
     }
 
     /// Local-only channel-deleted drop. See [`invalidate_membership_local`].
@@ -513,10 +525,15 @@ impl AppState {
     /// Fire-and-forget publish of a cache-key drop to all other pods. Failures
     /// are logged and swallowed — the REQ denial-path DB confirmation is the
     /// backstop, so a missed publish degrades to a <=10s TTL wait, never a leak.
-    fn spawn_cache_invalidation(&self, invalidation: CacheInvalidation) {
+    fn spawn_cache_invalidation(
+        &self,
+        ctx: &buzz_core::TenantContext,
+        invalidation: CacheInvalidation,
+    ) {
         let pubsub = Arc::clone(&self.pubsub);
+        let ctx = ctx.clone();
         tokio::spawn(async move {
-            if let Err(e) = pubsub.publish_cache_invalidation(&invalidation).await {
+            if let Err(e) = pubsub.publish_cache_invalidation(&ctx, &invalidation).await {
                 tracing::warn!("Failed to publish cache invalidation {invalidation:?}: {e}");
             }
         });
@@ -524,7 +541,19 @@ impl AppState {
 
     /// Apply a cache-key drop received from another pod. Calls the local-only
     /// drop variants so a received drop is never re-published (no fan-out loop).
-    pub fn apply_cache_invalidation(&self, invalidation: CacheInvalidation) {
+    ///
+    /// TODO(multi-tenant): `community_id` is threaded here from the scoped Redis
+    /// channel, but the four relay caches below are still keyed by
+    /// `channel_id`/`pubkey` alone — they are NOT yet community-prefixed. Under
+    /// N>1 a drop for one community would touch another community's entry for the
+    /// same channel UUID/pubkey. Re-keying these moka caches by
+    /// `(community_id, ..)` is the follow-up that consumes this argument; until
+    /// then it is carried but not yet used for key selection.
+    pub fn apply_cache_invalidation(
+        &self,
+        _community_id: buzz_core::CommunityId,
+        invalidation: CacheInvalidation,
+    ) {
         match invalidation {
             CacheInvalidation::Membership { channel_id, pubkey } => {
                 self.invalidate_membership_local(channel_id, &pubkey);
@@ -601,6 +630,26 @@ impl AppState {
             record.id,
             normalized_host,
         ))
+    }
+
+    /// Resolve the tenant for relay-internal startup producers (initial NIP-43
+    /// membership list, channel reconciliation) that run without a request host.
+    ///
+    /// Uses the configured `relay_url` host and idempotently ensures its
+    /// community row exists — the deployment-specific N=1 seed path, NOT a
+    /// fabricated default community. The host is the operator's own configured
+    /// identity, so minting a `TenantContext` from it here is the same authority
+    /// as a request whose `Host` header matches that configured host.
+    ///
+    /// TODO(multi-tenant): for N>1 these startup producers must iterate every
+    /// configured community (a `Db::list_communities` surface, Mari's lane) and
+    /// run per-community. This single-host path is correct for N=1 only.
+    pub async fn resolve_startup_tenant(
+        &self,
+    ) -> Result<buzz_core::TenantContext, crate::error::RelayError> {
+        let host = crate::api::nip05::extract_domain(&self.config.relay_url).to_lowercase();
+        let record = self.db.ensure_configured_community(&host).await?;
+        Ok(buzz_core::TenantContext::resolved(record.id, host))
     }
 }
 

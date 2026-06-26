@@ -211,7 +211,7 @@ async fn nip11_or_ws_handler(
 /// single-community (N=1) deployment the configured host and the request host
 /// coincide, so behaviour matches today's relay; the DB lookup still has the
 /// final say and an unmapped host is rejected.
-fn normalize_host(headers: &HeaderMap, fallback_host: &str) -> String {
+pub(crate) fn normalize_host(headers: &HeaderMap, fallback_host: &str) -> String {
     headers
         .get(axum::http::header::HOST)
         .and_then(|v| v.to_str().ok())

@@ -181,6 +181,19 @@ pub async fn submit_event(
     let event: nostr::Event = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
 
+    // Resolve the tenant from the request host (the HTTP twin of the WS
+    // upgrade bind): community comes from the connection host, never the
+    // authenticated key. An unmapped host fails closed. Resolved before any
+    // event routing so both the mesh and ingest paths bind the same tenant.
+    let host = crate::router::normalize_host(
+        &headers,
+        &crate::api::nip05::extract_domain(&state.config.relay_url),
+    );
+    let ctx = state
+        .resolve_tenant(&host)
+        .await
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;
+
     // Mesh signaling kinds (24620 status report, 24621 connect request) are
     // ephemeral and deliberately absent from ingest_event's per-kind allowlist.
     // The desktop's Rust coordinator publishes them via this bridge, so route
@@ -193,7 +206,7 @@ pub async fn submit_event(
     {
         let event_id = event.id.to_hex();
         return match crate::handlers::mesh_signaling::handle_mesh_event_http(
-            &state, &pubkey, &event,
+            &state, &ctx, &pubkey, &event,
         )
         .await
         {
@@ -212,7 +225,7 @@ pub async fn submit_event(
         auth_method: crate::handlers::ingest::HttpAuthMethod::Nip98,
     };
 
-    match crate::handlers::ingest::ingest_event(&state, event, auth).await {
+    match crate::handlers::ingest::ingest_event(&state, &ctx, event, auth).await {
         Ok(result) => Ok(Json(serde_json::json!({
             "event_id": result.event_id,
             "accepted": result.accepted,
@@ -247,6 +260,17 @@ pub async fn query_events(
 
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
     super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
+
+    // Resolve the tenant from the request host (community from the connection,
+    // never the authenticated key); unmapped host fails closed.
+    let host = crate::router::normalize_host(
+        &headers,
+        &crate::api::nip05::extract_domain(&state.config.relay_url),
+    );
+    let ctx = state
+        .resolve_tenant(&host)
+        .await
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;
 
     // Two-pass parse: preserve raw JSON for custom extension fields (before_id,
     // depth_limit, feed_types) that nostr::Filter silently drops.
@@ -297,7 +321,7 @@ pub async fn query_events(
         .await;
     }
 
-    if let Some(presence_events) = synthesize_presence(&state, &filters).await {
+    if let Some(presence_events) = synthesize_presence(&state, &ctx, &filters).await {
         return Ok(Json(Value::Array(presence_events)));
     }
 
@@ -957,7 +981,11 @@ pub async fn workflow_webhook(
 /// stored, and kind:40902 snapshots are relay-generated on demand).
 ///
 /// Returns `Some(events)` if handled, `None` to fall through to normal query.
-async fn synthesize_presence(state: &AppState, filters: &[nostr::Filter]) -> Option<Vec<Value>> {
+async fn synthesize_presence(
+    state: &AppState,
+    ctx: &buzz_core::TenantContext,
+    filters: &[nostr::Filter],
+) -> Option<Vec<Value>> {
     use buzz_core::kind::{KIND_PRESENCE_SNAPSHOT, KIND_PRESENCE_UPDATE};
 
     // Only intercept if every filter targets kind:20001 or 40902 with authors.
@@ -987,7 +1015,7 @@ async fn synthesize_presence(state: &AppState, filters: &[nostr::Filter]) -> Opt
     // Look up Redis.
     let presence_map = state
         .pubsub
-        .get_presence_bulk(&all_pubkeys)
+        .get_presence_bulk(ctx, &all_pubkeys)
         .await
         .unwrap_or_default();
 

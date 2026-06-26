@@ -295,9 +295,18 @@ async fn main() -> anyhow::Result<()> {
     if config.require_relay_membership {
         let startup_state = Arc::clone(&state);
         tokio::spawn(async move {
-            if let Err(e) =
-                buzz_relay::handlers::side_effects::publish_nip43_membership_list(&startup_state)
-                    .await
+            let ctx = match startup_state.resolve_startup_tenant().await {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to resolve startup tenant for NIP-43 membership list");
+                    return;
+                }
+            };
+            if let Err(e) = buzz_relay::handlers::side_effects::publish_nip43_membership_list(
+                &startup_state,
+                &ctx,
+            )
+            .await
             {
                 tracing::warn!(error = %e, "failed to publish initial NIP-43 membership list on startup");
             } else {
@@ -313,14 +322,25 @@ async fn main() -> anyhow::Result<()> {
     if std::env::var("BUZZ_RECONCILE_CHANNELS").is_ok() {
         let reconcile_state = Arc::clone(&state);
         tokio::spawn(async move {
+            // Resolve the startup tenant once (the configured-host N=1 community).
+            let ctx = match reconcile_state.resolve_startup_tenant().await {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to resolve startup tenant for channel reconciliation");
+                    return;
+                }
+            };
             // Try immediately, then retry every 5s for up to 2 minutes.
             // Handles CI pattern: relay starts → seed script inserts data → reconciliation.
             for attempt in 0..24u32 {
                 if attempt > 0 {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
-                match buzz_relay::handlers::side_effects::reconcile_channel_events(&reconcile_state)
-                    .await
+                match buzz_relay::handlers::side_effects::reconcile_channel_events(
+                    &reconcile_state,
+                    &ctx,
+                )
+                .await
                 {
                     Ok(()) => {}
                     Err(e) => {
@@ -374,10 +394,23 @@ async fn main() -> anyhow::Result<()> {
 
                 info!(count = expired.len(), "Ephemeral reaper archived channels");
 
+                // Resolve the startup tenant once per tick (configured-host N=1
+                // community). TODO(multi-tenant): for N>1 the reaper must resolve
+                // each archived channel's community (channel→community surface in
+                // buzz-db, Mari's lane) rather than the single relay host.
+                let ctx = match reaper_state.resolve_startup_tenant().await {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        error!("reaper failed to resolve startup tenant: {e}");
+                        continue;
+                    }
+                };
+
                 for channel_id in &expired {
                     // Emit a system message so members see why the channel was archived.
                     if let Err(e) = buzz_relay::handlers::side_effects::emit_system_message(
                         &reaper_state,
+                        &ctx,
                         *channel_id,
                         serde_json::json!({ "type": "channel_auto_archived" }),
                     )
@@ -389,6 +422,7 @@ async fn main() -> anyhow::Result<()> {
                     // Update NIP-29 discovery events so clients see the archived state.
                     if let Err(e) = buzz_relay::handlers::side_effects::emit_group_discovery_events(
                         &reaper_state,
+                        &ctx,
                         *channel_id,
                     )
                     .await
@@ -453,6 +487,18 @@ async fn main() -> anyhow::Result<()> {
 
                 info!(count = due.len(), "Reminder scheduler: due reminders found");
 
+                // Resolve the startup tenant once per tick (configured-host N=1
+                // community). TODO(multi-tenant): for N>1 the scheduler must
+                // resolve each reminder's community (a reminder/channel→community
+                // surface in buzz-db, Mari's lane) rather than the relay host.
+                let ctx = match scheduler_state.resolve_startup_tenant().await {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        error!("reminder scheduler failed to resolve startup tenant: {e}");
+                        continue;
+                    }
+                };
+
                 for reminder in due {
                     // Publish first, then claim. If publish fails the reminder
                     // stays unclaimed and will be retried next tick. If claim
@@ -460,7 +506,11 @@ async fn main() -> anyhow::Result<()> {
                     // next tick is harmless (subscribers dedup by event ID).
                     if let Err(e) = scheduler_state
                         .pubsub
-                        .publish_event(uuid::Uuid::nil(), &reminder_to_event(&reminder))
+                        .publish_event(
+                            &ctx,
+                            buzz_pubsub::EventTopic::Global,
+                            &reminder_to_event(&reminder),
+                        )
                         .await
                     {
                         error!(
@@ -528,8 +578,9 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(invalidation) => {
-                        state_for_cache.apply_cache_invalidation(invalidation);
+                    Ok(scoped) => {
+                        state_for_cache
+                            .apply_cache_invalidation(scoped.community_id, scoped.invalidation);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         metrics::counter!("buzz_cache_invalidation_lag_total").increment(n);

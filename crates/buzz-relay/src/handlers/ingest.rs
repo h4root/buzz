@@ -1117,6 +1117,7 @@ fn validate_event_reminder(event: &Event) -> Result<(), &'static str> {
 /// transport-specific response format.
 pub async fn ingest_event(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     event: Event,
     auth: IngestAuth,
 ) -> Result<IngestResult, IngestError> {
@@ -1226,7 +1227,7 @@ pub async fn ingest_event(
     // Command kinds are routed AFTER signature verification, timestamp check,
     // pubkey/auth match, and scope validation — never before.
     if buzz_core::kind::is_command_kind(kind_u32) {
-        return super::command_executor::handle_command(state, event, auth).await;
+        return super::command_executor::handle_command(state, ctx, event, auth).await;
     }
 
     let mut channel_id = if kind_u32 == KIND_REACTION {
@@ -1328,7 +1329,7 @@ pub async fn ingest_event(
 
     // Handled directly — these mutate relay_members and do NOT get stored.
     if is_relay_admin_kind(event.kind.as_u16() as u32) {
-        crate::handlers::relay_admin::handle_relay_admin_event(state, &event)
+        crate::handlers::relay_admin::handle_relay_admin_event(state, ctx, &event)
             .await
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
         return Ok(IngestResult {
@@ -1408,7 +1409,9 @@ pub async fn ingest_event(
         {
             warn!(error = %e, "failed to publish NIP-43 member removed event");
         }
-        if let Err(e) = crate::handlers::side_effects::publish_nip43_membership_list(state).await {
+        if let Err(e) =
+            crate::handlers::side_effects::publish_nip43_membership_list(state, ctx).await
+        {
             warn!(error = %e, "failed to publish NIP-43 membership list");
         }
 
@@ -1432,7 +1435,7 @@ pub async fn ingest_event(
     // NIP-43 admin commands above — the request itself falls through to normal
     // storage so the delta's `["e", request_id]` audit reference resolves.
     if is_identity_archive_request_kind(kind_u32) {
-        crate::handlers::identity_archive::handle_identity_archive_event(state, &event)
+        crate::handlers::identity_archive::handle_identity_archive_event(state, ctx, &event)
             .await
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
@@ -1778,7 +1781,7 @@ pub async fn ingest_event(
         }
 
         let pubkey_hex = auth.pubkey().to_hex();
-        dispatch_persistent_event(state, &stored_event, kind_u32, &pubkey_hex).await;
+        dispatch_persistent_event(state, ctx, &stored_event, kind_u32, &pubkey_hex).await;
 
         info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
         return Ok(IngestResult {
@@ -1826,7 +1829,7 @@ pub async fn ingest_event(
                     if let Err(re) = state.db.soft_delete_channel(ch_id).await {
                         warn!(event_id = %event_id_hex, "channel compensation failed: {re}");
                     }
-                    state.invalidate_channel_deleted();
+                    state.invalidate_channel_deleted(ctx);
                 }
                 return Err(match e {
                     buzz_db::DbError::AuthEventRejected => {
@@ -1858,14 +1861,14 @@ pub async fn ingest_event(
 
     if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
         if let Err(e) =
-            crate::handlers::side_effects::handle_side_effects(kind_u32, &event, state).await
+            crate::handlers::side_effects::handle_side_effects(kind_u32, &event, state, ctx).await
         {
             warn!(event_id = %event_id_hex, kind = kind_u32, "Side effect failed: {e}");
         }
     }
 
     let pubkey_hex = auth.pubkey().to_hex();
-    dispatch_persistent_event(state, &stored_event, kind_u32, &pubkey_hex).await;
+    dispatch_persistent_event(state, ctx, &stored_event, kind_u32, &pubkey_hex).await;
 
     info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
 

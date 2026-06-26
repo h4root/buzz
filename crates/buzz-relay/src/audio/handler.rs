@@ -56,9 +56,22 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 pub async fn ws_audio_handler(
     State(state): State<Arc<AppState>>,
     Path(channel_id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_audio_connection(socket, state, channel_id))
+    // Row-zero bind: resolve the tenant from the upgrade host before the audio
+    // session starts, mirroring the main WS door. An unmapped host fails closed
+    // with a generic 404 (no "which hosts exist" oracle).
+    let host = crate::router::normalize_host(
+        &headers,
+        &crate::api::nip05::extract_domain(&state.config.relay_url),
+    );
+    let tenant = match state.resolve_tenant(&host).await {
+        Ok(t) => t,
+        Err(_) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    ws.on_upgrade(move |socket| handle_audio_connection(socket, state, channel_id, tenant))
+        .into_response()
 }
 
 /// Highest huddle audio protocol version this relay understands. Clients are
@@ -84,7 +97,12 @@ fn default_protocol_version() -> u8 {
     1
 }
 
-async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channel_id: Uuid) {
+async fn handle_audio_connection(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    channel_id: Uuid,
+    tenant: buzz_core::TenantContext,
+) {
     let (mut ws_send, mut ws_recv) = socket.split();
 
     let challenge = generate_challenge();
@@ -171,7 +189,15 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         return;
     }
 
-    if let Err(e) = ensure_membership(&state, channel_id, &pubkey_bytes, parent_channel_id).await {
+    if let Err(e) = ensure_membership(
+        &state,
+        &tenant,
+        channel_id,
+        &pubkey_bytes,
+        parent_channel_id,
+    )
+    .await
+    {
         warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio membership denied: {e}");
         let _ = ws_send
             .send(WsMessage::Text(
@@ -317,6 +343,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let parent_id_for_event = parent_channel_id.unwrap_or(channel_id);
     emit_participant_event(
         &state,
+        &tenant,
         Kind::Custom(48101),
         channel_id,
         parent_id_for_event,
@@ -383,6 +410,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
 
     emit_participant_event(
         &state,
+        &tenant,
         Kind::Custom(48102),
         channel_id,
         parent_id_for_event,
@@ -403,6 +431,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
 
                 emit_participant_event(
                     &state,
+                    &tenant,
                     Kind::Custom(48103),
                     channel_id,
                     parent_id_for_event,
@@ -621,6 +650,7 @@ async fn heartbeat_loop(
 
 async fn ensure_membership(
     state: &AppState,
+    ctx: &buzz_core::TenantContext,
     channel_id: Uuid,
     pubkey_bytes: &[u8],
     parent_channel_id: Option<Uuid>,
@@ -678,7 +708,7 @@ async fn ensure_membership(
                     )
                     .await
                     .map_err(|e| format!("auto-add failed: {e}"))?;
-                state.invalidate_membership(channel_id, pubkey_bytes);
+                state.invalidate_membership(ctx, channel_id, pubkey_bytes);
 
                 return Ok(());
             }
@@ -690,6 +720,7 @@ async fn ensure_membership(
 
 async fn emit_participant_event(
     state: &AppState,
+    ctx: &buzz_core::TenantContext,
     kind: Kind,
     channel_id: Uuid,
     parent_channel_id: Uuid,
@@ -758,7 +789,7 @@ async fn emit_participant_event(
 
     // 2. Mark as locally-published before Redis broadcast to prevent
     //    double-delivery when the event echoes back through the subscriber loop.
-    state.mark_local_event(&event.id);
+    state.mark_local_event(ctx, &event.id);
 
     // 3. Local fan-out to WS subscribers on this node, through the guarded send
     //    path so a stale subscription on a removed/non-member connection cannot
@@ -767,8 +798,18 @@ async fn emit_participant_event(
     crate::handlers::event::fan_out_event_to_local_subscribers(state, &stored).await;
 
     // 4. Cross-node broadcast via Redis pub/sub.
-    if let Err(e) = state.pubsub.publish_event(parent_channel_id, &event).await {
-        state.local_event_ids.invalidate(&event.id.to_bytes());
+    if let Err(e) = state
+        .pubsub
+        .publish_event(
+            ctx,
+            buzz_pubsub::EventTopic::Channel(parent_channel_id),
+            &event,
+        )
+        .await
+    {
+        state
+            .local_event_ids
+            .invalidate(&(ctx.community(), event.id.to_bytes()));
         warn!(
             event_id = %event_id_hex,
             channel_id = %parent_channel_id,

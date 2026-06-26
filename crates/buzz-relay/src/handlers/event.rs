@@ -27,6 +27,18 @@ fn reject(reason: &'static str) {
     metrics::counter!("buzz_events_rejected_total", "reason" => reason).increment(1);
 }
 
+/// Map a stored event's optional channel id to its tenant-local pub/sub topic,
+/// preserving the legacy delivery semantics exactly: an exact channel id routes
+/// to [`EventTopic::Channel`]; a channel-less event (the historical `Uuid::nil()`
+/// global sentinel, or an explicit `None`) routes to [`EventTopic::Global`]. The
+/// nil-sentinel knowledge lives here in the relay, not in `buzz-pubsub`.
+fn event_topic_for(channel_id: Option<uuid::Uuid>) -> buzz_pubsub::EventTopic {
+    match channel_id {
+        Some(id) if !id.is_nil() => buzz_pubsub::EventTopic::Channel(id),
+        _ => buzz_pubsub::EventTopic::Global,
+    }
+}
+
 /// Bound the `kind` label to prevent cardinality explosion from arbitrary Nostr kinds.
 fn bounded_kind_label(kind: u32) -> String {
     match kind {
@@ -162,22 +174,23 @@ pub(crate) async fn fan_out_event_to_local_subscribers(state: &AppState, stored:
 
 /// Fan out one event received from Redis pub/sub to this relay's local subscribers.
 pub async fn fan_out_pubsub_event(state: &Arc<AppState>, channel_event: buzz_pubsub::ChannelEvent) {
-    // Nil UUID is the sentinel for channel-less global events (see
-    // `handle_ephemeral_event`'s global branch). Convert back to None so
-    // `fan_out()` uses the global subscriber index.
-    let channel_id = if channel_event.channel_id.is_nil() {
-        None
-    } else {
-        Some(channel_event.channel_id)
+    // The Redis topic supplies the routing scope. `EventTopic::Global` is the
+    // channel-less scope (the historical `Uuid::nil()` global sentinel); map it
+    // back to `None` so `fan_out()` uses the global subscriber index.
+    let channel_id = match channel_event.topic {
+        buzz_pubsub::EventTopic::Channel(id) => Some(id),
+        buzz_pubsub::EventTopic::Global => None,
     };
+    let community_id = channel_event.community_id;
     let stored = StoredEvent::new(channel_event.event, channel_id);
 
-    // Skip events that were already fanned out in-process (local echo). The
-    // cache has TTL-based eviction (60s) so entries are bounded regardless of
-    // subscriber health.
-    let event_id_bytes = stored.event.id.to_bytes();
-    if state.local_event_ids.get(&event_id_bytes).is_some() {
-        state.local_event_ids.invalidate(&event_id_bytes);
+    // Skip events that were already fanned out in-process (local echo). The cache
+    // is keyed by `(community_id, event_id)` so the same signed event legitimately
+    // present in two communities cannot have an A-local write suppress a B echo.
+    // TTL-based eviction (60s) keeps entries bounded regardless of subscriber health.
+    let echo_key = (community_id, stored.event.id.to_bytes());
+    if state.local_event_ids.get(&echo_key).is_some() {
+        state.local_event_ids.invalidate(&echo_key);
         return;
     }
 
@@ -214,22 +227,23 @@ pub async fn fan_out_pubsub_event(state: &Arc<AppState>, channel_event: buzz_pub
 /// Publish a stored event to subscribers and kick off async side effects.
 pub(crate) async fn dispatch_persistent_event(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     stored_event: &StoredEvent,
     kind_u32: u32,
     actor_pubkey_hex: &str,
 ) -> usize {
     let event_id_hex = stored_event.event.id.to_hex();
 
-    let pubsub_channel = stored_event.channel_id.unwrap_or(uuid::Uuid::nil());
-    state.mark_local_event(&stored_event.event.id);
+    let topic = event_topic_for(stored_event.channel_id);
+    state.mark_local_event(ctx, &stored_event.event.id);
     if let Err(e) = state
         .pubsub
-        .publish_event(pubsub_channel, &stored_event.event)
+        .publish_event(ctx, topic, &stored_event.event)
         .await
     {
         state
             .local_event_ids
-            .invalidate(&stored_event.event.id.to_bytes());
+            .invalidate(&(ctx.community(), stored_event.event.id.to_bytes()));
         warn!(event_id = %event_id_hex, "Redis publish failed: {e}");
     }
 
@@ -477,7 +491,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         conn_id,
     };
 
-    match super::ingest::ingest_event(&state, event, ingest_auth).await {
+    match super::ingest::ingest_event(&state, &conn.tenant, event, ingest_auth).await {
         Ok(result) => {
             if result.accepted {
                 metrics::counter!("buzz_events_stored_total", "kind" => kind_str).increment(1);
@@ -562,9 +576,15 @@ async fn handle_ephemeral_event(
         };
 
         if status == "offline" {
-            let _ = state.pubsub.clear_presence(&auth_pubkey).await;
+            let _ = state
+                .pubsub
+                .clear_presence(&conn.tenant, &auth_pubkey)
+                .await;
         } else {
-            let _ = state.pubsub.set_presence(&auth_pubkey, &status).await;
+            let _ = state
+                .pubsub
+                .set_presence(&conn.tenant, &auth_pubkey, &status)
+                .await;
         }
 
         // Presence is a channel-less ephemeral event. After updating Redis
@@ -578,7 +598,14 @@ async fn handle_ephemeral_event(
     // 30621 is the durable, relay-owned record.
     if event_kind_u32(&event) == KIND_MESH_STATUS_REPORT {
         let reporter_hex = auth_pubkey.to_hex();
-        match super::mesh_signaling::handle_status_report(&state, &reporter_hex, &event).await {
+        match super::mesh_signaling::handle_status_report(
+            &state,
+            &conn.tenant,
+            &reporter_hex,
+            &event,
+        )
+        .await
+        {
             Ok(()) => {
                 conn.send(RelayMessage::ok(event_id_hex, true, ""));
             }
@@ -607,7 +634,14 @@ async fn handle_ephemeral_event(
             return;
         }
         let requester_hex = auth_pubkey.to_hex();
-        match super::mesh_signaling::handle_connect_request(&state, &requester_hex, &event).await {
+        match super::mesh_signaling::handle_connect_request(
+            &state,
+            &conn.tenant,
+            &requester_hex,
+            &event,
+        )
+        .await
+        {
             Ok(()) => {
                 conn.send(RelayMessage::ok(event_id_hex, true, ""));
             }
@@ -629,10 +663,20 @@ async fn handle_ephemeral_event(
 
         // Mark as local before Redis publish to prevent double-delivery when
         // the event comes back through the Redis subscriber loop.
-        state.mark_local_event(&event.id);
+        state.mark_local_event(&conn.tenant, &event.id);
 
-        if let Err(e) = state.pubsub.publish_event(ch_id, &event).await {
-            state.local_event_ids.invalidate(&event.id.to_bytes());
+        if let Err(e) = state
+            .pubsub
+            .publish_event(
+                &conn.tenant,
+                buzz_pubsub::EventTopic::Channel(ch_id),
+                &event,
+            )
+            .await
+        {
+            state
+                .local_event_ids
+                .invalidate(&(conn.tenant.community(), event.id.to_bytes()));
             warn!(conn_id = %conn_id, event_id = %event_id_hex, "Ephemeral publish failed: {e}");
         }
 
@@ -643,18 +687,20 @@ async fn handle_ephemeral_event(
         let stored_event = StoredEvent::new(event.clone(), Some(ch_id));
         fan_out_event_to_local_subscribers(&state, &stored_event).await;
     } else {
-        // Channel-less ephemeral events (e.g., NIP-AB pairing kind:24134).
-        //
-        // Sentinel pattern: we use `Uuid::nil()` (all-zeros UUID) as a
-        // "global channel" routing key in Redis pub/sub. This lets other relay
-        // nodes receive and fan out these events without any real channel_id.
-        // The nil UUID is ONLY a Redis routing key — it never reaches the DB.
-        // On the receiving end (main.rs subscriber loop), `is_nil()` is checked
-        // and converted back to `None` so `fan_out()` uses the global index.
-        state.mark_local_event(&event.id);
+        // Channel-less ephemeral events (e.g., NIP-AB pairing kind:24134) route
+        // to the community-scoped global topic (`EventTopic::Global`). On the
+        // receiving end (`fan_out_pubsub_event`), `Global` maps back to `None` so
+        // `fan_out()` uses the global subscriber index.
+        state.mark_local_event(&conn.tenant, &event.id);
 
-        if let Err(e) = state.pubsub.publish_event(uuid::Uuid::nil(), &event).await {
-            state.local_event_ids.invalidate(&event.id.to_bytes());
+        if let Err(e) = state
+            .pubsub
+            .publish_event(&conn.tenant, buzz_pubsub::EventTopic::Global, &event)
+            .await
+        {
+            state
+                .local_event_ids
+                .invalidate(&(conn.tenant.community(), event.id.to_bytes()));
             warn!(conn_id = %conn_id, event_id = %event_id_hex, "Ephemeral global publish failed: {e}");
         }
 
@@ -818,9 +864,15 @@ async fn handle_agent_observer_event(
         }
     }
 
-    state.mark_local_event(&event.id);
-    if let Err(e) = state.pubsub.publish_event(uuid::Uuid::nil(), &event).await {
-        state.local_event_ids.invalidate(&event.id.to_bytes());
+    state.mark_local_event(&conn.tenant, &event.id);
+    if let Err(e) = state
+        .pubsub
+        .publish_event(&conn.tenant, buzz_pubsub::EventTopic::Global, &event)
+        .await
+    {
+        state
+            .local_event_ids
+            .invalidate(&(conn.tenant.community(), event.id.to_bytes()));
         warn!(conn_id = %conn_id, event_id = %event_id_hex, "Agent observer publish failed: {e}");
     }
 
@@ -1022,7 +1074,7 @@ mod tests {
 
         use axum::extract::ws::Message;
         use buzz_core::kind::{KIND_MEMBER_ADDED_NOTIFICATION, KIND_PRESENCE_UPDATE};
-        use buzz_pubsub::ChannelEvent;
+        use buzz_pubsub::{ChannelEvent, EventTopic};
         use nostr::{EventBuilder, Filter, Keys, Kind};
         use tokio::sync::{mpsc, Mutex};
         use tokio_util::sync::CancellationToken;
@@ -1033,6 +1085,15 @@ mod tests {
 
         async fn test_state() -> Arc<AppState> {
             super::fanout_access::test_state().await
+        }
+
+        /// A fixed resolved tenant for fan-out tests. The community id is arbitrary
+        /// but stable, so `mark_local_event` and the Redis echo key line up.
+        fn test_ctx() -> buzz_core::TenantContext {
+            buzz_core::TenantContext::resolved(
+                buzz_core::CommunityId::from_uuid(Uuid::nil()),
+                "test.relay",
+            )
         }
 
         fn register_global_sub(
@@ -1122,7 +1183,8 @@ mod tests {
             fan_out_pubsub_event(
                 &state,
                 ChannelEvent {
-                    channel_id: Uuid::nil(),
+                    community_id: test_ctx().community(),
+                    topic: EventTopic::Global,
                     event,
                 },
             )
@@ -1139,11 +1201,12 @@ mod tests {
             let (_conn_id, mut rx) = register_presence_sub(&state, "presence");
             let event = presence_event("online");
 
-            state.mark_local_event(&event.id);
+            state.mark_local_event(&test_ctx(), &event.id);
             fan_out_pubsub_event(
                 &state,
                 ChannelEvent {
-                    channel_id: Uuid::nil(),
+                    community_id: test_ctx().community(),
+                    topic: EventTopic::Global,
                     event,
                 },
             )
@@ -1170,7 +1233,8 @@ mod tests {
             fan_out_pubsub_event(
                 &state,
                 ChannelEvent {
-                    channel_id: Uuid::nil(),
+                    community_id: test_ctx().community(),
+                    topic: EventTopic::Global,
                     event,
                 },
             )
@@ -1226,6 +1290,19 @@ mod tests {
             let origin_fanout = spawn_pubsub_fanout_loop(origin.clone());
             let receiver_fanout = spawn_pubsub_fanout_loop(receiver.clone());
 
+            // Both relays declare interest in the community-scoped Global topic —
+            // the dynamic-subscription seam the relay wiring drives from a live
+            // presence/global subscription registering. Without retain, the new
+            // refcounted subscriber never SUBSCRIBEs and nothing is delivered.
+            origin
+                .pubsub
+                .retain_topic(&test_ctx(), EventTopic::Global)
+                .await;
+            receiver
+                .pubsub
+                .retain_topic(&test_ctx(), EventTopic::Global)
+                .await;
+
             let (_origin_conn, mut origin_rx) = register_presence_sub(&origin, "origin-presence");
             let (_receiver_conn, mut receiver_rx) =
                 register_presence_sub(&receiver, "receiver-presence");
@@ -1236,10 +1313,10 @@ mod tests {
 
             let event = presence_event("online");
             let event_id = event.id;
-            origin.mark_local_event(&event.id);
+            origin.mark_local_event(&test_ctx(), &event.id);
             origin
                 .pubsub
-                .publish_event(Uuid::nil(), &event)
+                .publish_event(&test_ctx(), EventTopic::Global, &event)
                 .await
                 .expect("publish presence through Redis");
 

@@ -192,17 +192,19 @@ pub fn sanitize_mesh_status(payload: &Value, now_unix: u64) -> BuzzMeshStatus {
 /// the reporting member's pubkey so each member's note is isolated.
 pub async fn publish_mesh_status_from_payload(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     reporter_pubkey_hex: &str,
     payload: &Value,
 ) -> anyhow::Result<()> {
     let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
     let status = sanitize_mesh_status(payload, now_unix);
-    publish_mesh_status(state, reporter_pubkey_hex, &status).await
+    publish_mesh_status(state, ctx, reporter_pubkey_hex, &status).await
 }
 
 /// Publish a pre-sanitized mesh status. Exposed for tests and integration seams.
 pub async fn publish_mesh_status(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     reporter_pubkey_hex: &str,
     status: &BuzzMeshStatus,
 ) -> anyhow::Result<()> {
@@ -228,6 +230,7 @@ pub async fn publish_mesh_status(
         let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
         dispatch_persistent_event(
             state,
+            ctx,
             &stored,
             KIND_MESH_LLM_RELAY_STATUS,
             &relay_pubkey_hex,

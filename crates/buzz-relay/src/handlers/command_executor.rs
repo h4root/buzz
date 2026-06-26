@@ -33,6 +33,7 @@ use super::side_effects::{
 /// Route a command-kind event to the appropriate handler.
 pub async fn handle_command(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     event: Event,
     auth: IngestAuth,
 ) -> Result<IngestResult, IngestError> {
@@ -45,9 +46,9 @@ pub async fn handle_command(
 
     let kind = event.kind.as_u16() as u32;
     match kind {
-        KIND_DM_OPEN => handle_dm_open(state, &event, &auth).await,
-        KIND_DM_ADD_MEMBER => handle_dm_add_member(state, &event, &auth).await,
-        KIND_DM_HIDE => handle_dm_hide(state, &event, &auth).await,
+        KIND_DM_OPEN => handle_dm_open(state, ctx, &event, &auth).await,
+        KIND_DM_ADD_MEMBER => handle_dm_add_member(state, ctx, &event, &auth).await,
+        KIND_DM_HIDE => handle_dm_hide(state, ctx, &event, &auth).await,
         KIND_WORKFLOW_DEF => handle_workflow_def(state, &event, &auth).await,
         KIND_WORKFLOW_TRIGGER => handle_workflow_trigger(state, &event, &auth).await,
         KIND_APPROVAL_GRANT => handle_approval_grant(state, &event, &auth).await,
@@ -228,6 +229,7 @@ fn compute_definition_hash(json_str: &str) -> Vec<u8> {
 
 async fn handle_dm_open(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     event: &Event,
     auth: &IngestAuth,
 ) -> Result<IngestResult, IngestError> {
@@ -292,12 +294,13 @@ async fn handle_dm_open(
     if was_created {
         // Invalidate caches for all participants
         for pk in &all_bytes {
-            state.invalidate_membership(channel.id, pk);
+            state.invalidate_membership(ctx, channel.id, pk);
         }
 
         let participant_hexes: Vec<String> = all_bytes.iter().map(hex::encode).collect();
         if let Err(e) = emit_system_message(
             state,
+            ctx,
             channel.id,
             serde_json::json!({
                 "type": "dm_created",
@@ -310,13 +313,14 @@ async fn handle_dm_open(
             warn!("DM open: system message failed: {e}");
         }
 
-        if let Err(e) = emit_group_discovery_events(state, channel.id).await {
+        if let Err(e) = emit_group_discovery_events(state, ctx, channel.id).await {
             warn!(channel = %channel.id, "DM open: discovery emission failed: {e}");
         }
 
         for participant in &all_bytes {
             if let Err(e) = emit_membership_notification(
                 state,
+                ctx,
                 channel.id,
                 participant,
                 &self_bytes,
@@ -330,7 +334,7 @@ async fn handle_dm_open(
     } else {
         // Re-open of an existing DM cleared the caller's hidden_at; refresh
         // their NIP-DV snapshot so the DM reappears in the sidebar.
-        if let Err(e) = publish_dm_visibility_snapshot(state, &self_bytes).await {
+        if let Err(e) = publish_dm_visibility_snapshot(state, ctx, &self_bytes).await {
             warn!("DM re-open: visibility snapshot failed: {e}");
         }
     }
@@ -351,6 +355,7 @@ async fn handle_dm_open(
 
 async fn handle_dm_add_member(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     event: &Event,
     auth: &IngestAuth,
 ) -> Result<IngestResult, IngestError> {
@@ -442,16 +447,17 @@ async fn handle_dm_add_member(
     // 7. Cache invalidation + notifications for new DM (post-commit, best-effort)
     if was_created {
         for pk in &all_bytes {
-            state.invalidate_membership(new_channel.id, pk);
+            state.invalidate_membership(ctx, new_channel.id, pk);
         }
 
-        if let Err(e) = emit_group_discovery_events(state, new_channel.id).await {
+        if let Err(e) = emit_group_discovery_events(state, ctx, new_channel.id).await {
             warn!(channel = %new_channel.id, "DM add_member: discovery emission failed: {e}");
         }
 
         for participant_bytes in &all_bytes {
             if let Err(e) = emit_membership_notification(
                 state,
+                ctx,
                 new_channel.id,
                 participant_bytes,
                 &self_bytes,
@@ -479,6 +485,7 @@ async fn handle_dm_add_member(
 
 async fn handle_dm_hide(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     event: &Event,
     auth: &IngestAuth,
 ) -> Result<IngestResult, IngestError> {
@@ -537,7 +544,7 @@ async fn handle_dm_hide(
 
     // 5. Side effect (post-commit, best-effort): refresh the caller's NIP-DV
     // visibility snapshot so clients can filter this DM out of the sidebar.
-    if let Err(e) = publish_dm_visibility_snapshot(state, &self_bytes).await {
+    if let Err(e) = publish_dm_visibility_snapshot(state, ctx, &self_bytes).await {
         warn!("DM hide: visibility snapshot failed: {e}");
     }
 

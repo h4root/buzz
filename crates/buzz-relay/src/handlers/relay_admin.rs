@@ -62,7 +62,11 @@ fn extract_tag_value(event: &Event, name: &str) -> Option<String> {
 ///
 /// Returns `Ok(())` on success.  Returns `Err(msg)` — where `msg` is a
 /// human-readable rejection reason — on any validation failure.
-pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> Result<(), String> {
+pub async fn handle_relay_admin_event(
+    state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
+    event: &Event,
+) -> Result<(), String> {
     let kind = event.kind.as_u16() as u32;
     let sender_hex = event.pubkey.to_hex();
 
@@ -143,7 +147,7 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
                 if let Err(e) = publish_nip43_member_added(state, &target_hex).await {
                     warn!(error = %e, "failed to publish NIP-43 member added event");
                 }
-                if let Err(e) = publish_nip43_membership_list(state).await {
+                if let Err(e) = publish_nip43_membership_list(state, ctx).await {
                     warn!(error = %e, "failed to publish NIP-43 membership list");
                 }
             }
@@ -203,7 +207,7 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
             if let Err(e) = publish_nip43_member_removed(state, &target_hex).await {
                 warn!(error = %e, "failed to publish NIP-43 member removed event");
             }
-            if let Err(e) = publish_nip43_membership_list(state).await {
+            if let Err(e) = publish_nip43_membership_list(state, ctx).await {
                 warn!(error = %e, "failed to publish NIP-43 membership list");
             }
         }
@@ -260,7 +264,7 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
                 "relay member role changed"
             );
 
-            if let Err(e) = publish_nip43_membership_list(state).await {
+            if let Err(e) = publish_nip43_membership_list(state, ctx).await {
                 warn!(error = %e, "failed to publish NIP-43 membership list");
             }
         }

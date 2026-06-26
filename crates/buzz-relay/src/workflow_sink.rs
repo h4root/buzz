@@ -158,9 +158,34 @@ impl ActionSink for RelayActionSink {
             // 5. Post-persist side effects (fan-out, search, audit)
             //    Only if actually inserted (idempotency guard).
             if was_inserted {
-                let _ =
-                    dispatch_persistent_event(&state, &stored_event, kind_u32, &author_pubkey_hex)
+                // TODO(multi-tenant): workflows run from the cron with no request
+                // host, so the tenant is resolved via the configured single-host
+                // startup seed (N=1 correct only). For N>1 the sink must resolve
+                // the community from the target channel (a channel→community
+                // surface in buzz-db, Mari's lane) rather than the relay host.
+                //
+                // Side effects are best-effort (the event is already persisted),
+                // so a tenant-resolve failure logs and skips dispatch rather than
+                // failing the already-committed send — matching the prior
+                // fire-and-forget `let _ = dispatch_persistent_event(..)`.
+                match state.resolve_startup_tenant().await {
+                    Ok(ctx) => {
+                        let _ = dispatch_persistent_event(
+                            &state,
+                            &ctx,
+                            &stored_event,
+                            kind_u32,
+                            &author_pubkey_hex,
+                        )
                         .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            event_id = %event_id_hex,
+                            "workflow sink: failed to resolve startup tenant, skipping side effects: {e}"
+                        );
+                    }
+                }
             }
 
             Ok(event_id_hex)

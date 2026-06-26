@@ -37,6 +37,7 @@ impl ConsentPath {
 /// Validate and execute a NIP-IA archive/unarchive request.
 pub async fn handle_identity_archive_event(
     state: &Arc<AppState>,
+    ctx: &buzz_core::TenantContext,
     event: &Event,
 ) -> Result<(), String> {
     let kind = event.kind.as_u16() as u32;
@@ -99,6 +100,7 @@ pub async fn handle_identity_archive_event(
     let publish_delta = if kind == KIND_IA_ARCHIVE_REQUEST {
         publish_nipia_archived(
             state,
+            ctx,
             &target_hex,
             consent_path.as_str(),
             &actor_hex,
@@ -111,6 +113,7 @@ pub async fn handle_identity_archive_event(
     } else {
         publish_nipia_unarchived(
             state,
+            ctx,
             &target_hex,
             consent_path.as_str(),
             &actor_hex,
@@ -124,7 +127,7 @@ pub async fn handle_identity_archive_event(
     if let Err(e) = publish_delta {
         warn!(error = %e, "failed to publish NIP-IA delta");
     }
-    if let Err(e) = publish_nipia_archival_list(state).await {
+    if let Err(e) = publish_nipia_archival_list(state, ctx).await {
         warn!(error = %e, "failed to publish NIP-IA archival list");
     }
 
@@ -352,6 +355,13 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
+    fn test_ctx() -> buzz_core::TenantContext {
+        buzz_core::TenantContext::resolved(
+            buzz_core::CommunityId::from_uuid(uuid::Uuid::nil()),
+            "relay.test",
+        )
+    }
+
     fn make_test_event(kind: u16, tags: Vec<Vec<&'static str>>) -> Event {
         let keys = Keys::generate();
         let nostr_tags: Vec<Tag> = tags
@@ -527,7 +537,7 @@ mod tests {
 
         let request_auth = auth_tag(&owner_keys, &target_pubkey);
         let archive_request = owner_archive_request(&owner_keys, &target_hex, request_auth.clone());
-        handle_identity_archive_event(&state, &archive_request)
+        handle_identity_archive_event(&state, &test_ctx(), &archive_request)
             .await
             .expect("owner archive accepted while live kind:0 attests owner");
         assert!(
@@ -551,7 +561,7 @@ mod tests {
             .expect("replace target kind:0");
 
         let stale_request = owner_archive_request(&owner_keys, &target_hex, request_auth);
-        let err = handle_identity_archive_event(&state, &stale_request)
+        let err = handle_identity_archive_event(&state, &test_ctx(), &stale_request)
             .await
             .expect_err("stale owner request must be rejected after live kind:0 owner flip");
         assert!(
