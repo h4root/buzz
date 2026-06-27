@@ -213,6 +213,7 @@ pub async fn handle_req(
             &pubkey_bytes,
             &conn,
             &state,
+            trace_state.as_ref(),
         )
         .await;
         return;
@@ -282,6 +283,42 @@ pub async fn handle_req(
                 return;
             }
         };
+
+        // Conformance read-seam emit (non-search lane). Project each row's
+        // true community label via a per-channel lookup independent of the
+        // query's WHERE clause — see `record_read_message_rows` for the
+        // (B) projection strategy and the missing-lookup ImplBug
+        // guard-rail. Skipped silently if `trace_state` is `None` (only
+        // happens on malformed pubkey, a separate failure path).
+        if let Some(state_snap) = trace_state.as_ref() {
+            let row_channels: Vec<Option<uuid::Uuid>> =
+                events.iter().map(|e| e.channel_id).collect();
+            let distinct: Vec<uuid::Uuid> = {
+                let mut s: std::collections::BTreeSet<uuid::Uuid> =
+                    std::collections::BTreeSet::new();
+                for c in row_channels.iter().flatten() {
+                    s.insert(*c);
+                }
+                s.into_iter().collect()
+            };
+            let channel_communities = match state.db.communities_of_channels(&distinct).await {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(
+                        conn_id = %conn_id, sub_id = %sub_id,
+                        "conformance row-community lookup failed: {e}"
+                    );
+                    std::collections::HashMap::new()
+                }
+            };
+            crate::conformance::record_read_message_rows(
+                &state.tracer,
+                state_snap,
+                per_filter_channel,
+                &row_channels,
+                &channel_communities,
+            );
+        }
 
         for stored in &events {
             // Per-filter NIP-01 matching — use the current filter only, not the
@@ -433,6 +470,7 @@ async fn handle_search_req(
     reader_pubkey_bytes: &[u8],
     conn: &ConnectionState,
     state: &AppState,
+    trace_state: Option<&crate::conformance::AbstractState>,
 ) {
     // The community-wide channel scope (no #h tag on the filter). `None` means
     // "no accessible channels and no global access" → EOSE, exactly as the
@@ -558,6 +596,44 @@ async fn handle_search_req(
                         break;
                     }
                 };
+
+                // Conformance read-seam emit (search lane). Same (B)
+                // projection + missing-lookup guard-rail as the
+                // non-search path — see `record_read_by_id_rows`. The
+                // `filter_channel` is `None`: search at the abstract
+                // level isn't bound to a single channel filter, the
+                // per-row `channel_id` carries the channel identity
+                // honestly.
+                if let Some(state_snap) = trace_state {
+                    let row_channels: Vec<Option<uuid::Uuid>> =
+                        events.iter().map(|e| e.channel_id).collect();
+                    let distinct: Vec<uuid::Uuid> = {
+                        let mut s: std::collections::BTreeSet<uuid::Uuid> =
+                            std::collections::BTreeSet::new();
+                        for c in row_channels.iter().flatten() {
+                            s.insert(*c);
+                        }
+                        s.into_iter().collect()
+                    };
+                    let channel_communities =
+                        match state.db.communities_of_channels(&distinct).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                warn!(
+                                    sub_id = %sub_id,
+                                    "conformance row-community lookup failed: {e}"
+                                );
+                                std::collections::HashMap::new()
+                            }
+                        };
+                    crate::conformance::record_read_by_id_rows(
+                        &state.tracer,
+                        state_snap,
+                        None,
+                        &row_channels,
+                        &channel_communities,
+                    );
+                }
 
                 let event_map: std::collections::HashMap<[u8; 32], &buzz_core::StoredEvent> =
                     events
