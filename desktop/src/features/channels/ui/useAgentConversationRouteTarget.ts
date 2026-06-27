@@ -23,6 +23,7 @@ type UseAgentConversationRouteTargetInput = {
   activeChannel: Channel | null;
   agentConversationMarkers: readonly AgentConversationMarker[];
   agentPubkeys: ReadonlySet<string>;
+  agentLookupReady: boolean;
   enabled: boolean;
   goChannel: GoChannel;
   messageProfilesReady: boolean;
@@ -37,6 +38,7 @@ type UseAgentConversationRouteTargetInput = {
 export function useAgentConversationRouteTarget({
   activeChannel,
   agentConversationMarkers,
+  agentLookupReady,
   agentPubkeys,
   enabled,
   goChannel,
@@ -75,6 +77,9 @@ export function useAgentConversationRouteTarget({
         (message) => message.id === targetAgentConversationReplyId,
       ) ?? null;
     if (!sourceMessage) {
+      return;
+    }
+    if (!marker && !agentLookupReady) {
       return;
     }
 
@@ -128,6 +133,7 @@ export function useAgentConversationRouteTarget({
   }, [
     activeChannel,
     agentConversationMarkers,
+    agentLookupReady,
     agentPubkeys,
     enabled,
     goChannel,
