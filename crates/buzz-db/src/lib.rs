@@ -312,6 +312,52 @@ impl Db {
         .transpose()
     }
 
+    /// Batched version of [`Self::community_of_channel`]: given a list of
+    /// channel UUIDs, returns a map from channel id → owning community
+    /// for every channel that exists (soft-deletes excluded).
+    ///
+    /// Used by the runtime conformance read-seam emitters in `buzz-relay`:
+    /// after a `query_events`/`get_events_by_ids` returns N rows, the
+    /// emitter collects distinct `channel_id`s, calls this once, then
+    /// projects each row's true community label independently of the
+    /// fetch query's WHERE clause. That independence is what makes the
+    /// `Inv_NonInterference` / `Inv_ReadConfinement` gate non-vacuous —
+    /// a mutation that dropped `community_id = $X` from the fetch query
+    /// would still let this helper return the row's true label, and the
+    /// checker would see the mismatch.
+    ///
+    /// Channels missing from the result map (deleted or never existed)
+    /// are intentionally not present rather than mapped to a default —
+    /// callers MUST treat "channel-id not in map" as a coverage breach,
+    /// never as "use the resolved community".
+    pub async fn communities_of_channels(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, CommunityId>> {
+        if channel_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT id, community_id
+            FROM channels
+            WHERE id = ANY($1)
+              AND deleted_at IS NULL
+            "#,
+        )
+        .bind(channel_ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = std::collections::HashMap::with_capacity(rows.len());
+        for row in rows {
+            let ch: Uuid = row.try_get("id")?;
+            let cm: Uuid = row.try_get("community_id")?;
+            out.insert(ch, CommunityId::from_uuid(cm));
+        }
+        Ok(out)
+    }
+
     /// Inserts an event. Returns `(StoredEvent, was_inserted)` — `false` on duplicate.
     pub async fn insert_event(
         &self,

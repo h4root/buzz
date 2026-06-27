@@ -140,6 +140,32 @@ fn bad_coverage_breach_trace() -> Vec<TraceStep> {
     )]
 }
 
+/// A foreign-row trace: bound to community A but a `ReadMessageRows`
+/// returns a row whose community label is community B. This is the
+/// (B)-projection negative case Eva requested as the guard-rail for
+/// "channel-scoped row masquerading as channel-less": IF the row had
+/// been mis-projected as channel-less (and thus defaulted to the
+/// resolved community A), the subset check would have passed
+/// vacuously. By recording the row's TRUE community (B) — independent
+/// of the fetch query's WHERE clause — the `Inv_NonInterference` /
+/// `Inv_ReadConfinement` bite surfaces immediately as
+/// `NonInterference`. This fixture is the proof artifact that the
+/// projection helper's missing-lookup guard-rail is non-vacuous.
+fn bad_foreign_row_leak_trace() -> Vec<TraceStep> {
+    vec![TraceStep::new(
+        TraceAction::ReadMessageRows {
+            // The query was scoped to a channel in A (the host-resolved
+            // tenant). The relay's filter said "this row should belong
+            // to A." But the row's TRUE community is B — surfaced by
+            // the (B)-strategy projection reading the row's own
+            // `channel_id` against the channels table.
+            channel: Some(channel_in_a()),
+            row_communities: vec![community_b()],
+        },
+        state_a(),
+    )]
+}
+
 // ---- Fixture round-trip ------------------------------------------------
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -248,6 +274,20 @@ fn coverage_breach_is_caught() {
     assert!(
         matches!(err, TransitionError::CoverageBreach { .. }),
         "ImplBug must surface as CoverageBreach, got {err:?}"
+    );
+}
+
+#[test]
+fn foreign_row_leak_is_non_interference() {
+    let trace = bad_foreign_row_leak_trace();
+    assert_fixture_matches("bad_foreign_row_leak.jsonl", &trace);
+
+    let scenario = Scenario::unstructured(trace);
+    let err = check_trace(&scenario)
+        .expect_err("foreign row community label must be rejected by Inv_NonInterference");
+    assert!(
+        matches!(err, TransitionError::NonInterference { .. }),
+        "foreign row label must surface as NonInterference, got {err:?}"
     );
 }
 

@@ -165,6 +165,170 @@ pub fn record_req_authcheck(
     ));
 }
 
+/// Project a row's true community label, independent of the fetch
+/// query's WHERE clause. Encapsulates the (B) projection-strategy
+/// guard-rail Eva specified:
+///
+/// - If the row is **channel-scoped** (`row.channel_id == Some(ch)`):
+///   look up `ch` in `channel_communities` (precomputed via
+///   [`buzz_db::Buzz::communities_of_channels`]). On a hit, return the
+///   looked-up label. On a miss, return `None` — the caller MUST treat
+///   this as a coverage breach and fail closed.
+/// - If the row is **channel-less** (`row.channel_id == None`):
+///   project as the resolved community. Channel-less rows have no
+///   independent per-channel community to look up — the projection is
+///   honest for those rows, not a tautology (community-global rows are
+///   genuinely tenant-scoped).
+///
+/// The distinction "is this row channel-less?" comes from the row's
+/// own `channel_id`, not from the query filter, so a channel-scoped
+/// row CANNOT masquerade as channel-less to dodge the lookup.
+fn project_row_community(
+    row_channel_id: Option<Uuid>,
+    resolved: &CommunityLabel,
+    channel_communities: &std::collections::HashMap<Uuid, buzz_core::CommunityId>,
+) -> Option<CommunityLabel> {
+    match row_channel_id {
+        None => Some(*resolved),
+        Some(ch) => channel_communities
+            .get(&ch)
+            .map(|cid| CommunityLabel::from_uuid(*cid.as_uuid())),
+    }
+}
+
+/// Outcome of projecting a row set's community labels for the read
+/// seam. Either a clean `Vec<CommunityLabel>` (one per row, same order)
+/// OR an [`TraceAction::ImplBug`] coverage breach if any channel-scoped
+/// row's channel id was missing from the lookup map.
+///
+/// Returning a discriminated outcome (rather than silently substituting
+/// the resolved community on missing-lookup) is what keeps the gate
+/// non-vacuous: a mutation that, say, soft-deletes a channel mid-query
+/// would land here and surface as an `ImplBug`, not slip past as a
+/// resolved-label projection.
+#[derive(Debug)]
+pub enum RowCommunityProjection {
+    /// One label per input row, in the same order.
+    Ok(Vec<CommunityLabel>),
+    /// One or more channel-scoped rows had no entry in the lookup map.
+    /// Carries the seam-name + the first offending channel id for
+    /// debuggability; the checker treats `ImplBug` as a coverage breach.
+    MissingLookup {
+        /// Short stable tag identifying which seam projected without
+        /// a lookup (used as the `ImplBug.kind` value).
+        kind: &'static str,
+        /// First channel id whose lookup was missing — kept for log
+        /// debuggability, not consumed by the trace.
+        first_missing_channel: Uuid,
+    },
+}
+
+/// Project `row_communities` for a row set, applying the (B) strategy
+/// guard-rail.
+///
+/// `rows` is the list of `(channel_id_option)` per row in the result
+/// set, in the order the relay will deliver them.
+/// `channel_communities` is the result of
+/// [`buzz_db::Buzz::communities_of_channels`] over the distinct
+/// channel ids in `rows`.
+pub fn project_row_communities(
+    rows: &[Option<Uuid>],
+    resolved: &CommunityLabel,
+    channel_communities: &std::collections::HashMap<Uuid, buzz_core::CommunityId>,
+) -> RowCommunityProjection {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        match project_row_community(*row, resolved, channel_communities) {
+            Some(label) => out.push(label),
+            None => {
+                // `row` is Some(ch) (channel-less rows always project Some);
+                // the unwrap is the offending channel id.
+                let ch = row.expect("project_row_community returns None only for Some(ch)");
+                return RowCommunityProjection::MissingLookup {
+                    kind: "row_community_lookup_missing",
+                    first_missing_channel: ch,
+                };
+            }
+        }
+    }
+    RowCommunityProjection::Ok(out)
+}
+
+/// Record a [`TraceAction::ReadMessageRows`] (non-search lane) or fail
+/// closed with an `ImplBug` step if the row community projection hit a
+/// missing-lookup.
+///
+/// `filter_channel` is the channel filter the query was scoped to (or
+/// `None` for a global query). Rows are presented as the row's own
+/// `channel_id` value — independent of the filter — so a channel-scoped
+/// row cannot evade the per-channel lookup.
+pub fn record_read_message_rows(
+    tracer: &Arc<dyn Tracer>,
+    state: &AbstractState,
+    filter_channel: Option<Uuid>,
+    rows: &[Option<Uuid>],
+    channel_communities: &std::collections::HashMap<Uuid, buzz_core::CommunityId>,
+) {
+    let projection = project_row_communities(rows, &state.resolved_community, channel_communities);
+    match projection {
+        RowCommunityProjection::Ok(row_communities) => {
+            tracer.record(TraceStep::new(
+                TraceAction::ReadMessageRows {
+                    channel: filter_channel.map(channel_label),
+                    row_communities,
+                },
+                state.clone(),
+            ));
+        }
+        RowCommunityProjection::MissingLookup {
+            kind,
+            first_missing_channel: _,
+        } => {
+            tracer.record(TraceStep::new(
+                TraceAction::ImplBug {
+                    kind: kind.to_string(),
+                },
+                state.clone(),
+            ));
+        }
+    }
+}
+
+/// Search-lane companion to [`record_read_message_rows`]. Emits
+/// [`TraceAction::ReadByIdRows`] for the per-hit refetch; same
+/// projection + missing-lookup guard-rail.
+pub fn record_read_by_id_rows(
+    tracer: &Arc<dyn Tracer>,
+    state: &AbstractState,
+    filter_channel: Option<Uuid>,
+    rows: &[Option<Uuid>],
+    channel_communities: &std::collections::HashMap<Uuid, buzz_core::CommunityId>,
+) {
+    let projection = project_row_communities(rows, &state.resolved_community, channel_communities);
+    match projection {
+        RowCommunityProjection::Ok(row_communities) => {
+            tracer.record(TraceStep::new(
+                TraceAction::ReadByIdRows {
+                    channel: filter_channel.map(channel_label),
+                    row_communities,
+                },
+                state.clone(),
+            ));
+        }
+        RowCommunityProjection::MissingLookup {
+            kind,
+            first_missing_channel: _,
+        } => {
+            tracer.record(TraceStep::new(
+                TraceAction::ImplBug {
+                    kind: kind.to_string(),
+                },
+                state.clone(),
+            ));
+        }
+    }
+}
+
 /// RAII coverage-breach guard. Constructed at the top of any critical
 /// seam (currently: `ingest_event`); the guard observes a [`Tracer`]
 /// wrapper that counts emits. If the seam exits without any emit
@@ -423,6 +587,141 @@ mod tests {
                 );
             }
             other => panic!("expected AuthCheck action, got {other:?}"),
+        }
+    }
+
+    /// Channel-less row projects as the resolved community — honest, not
+    /// tautological (community-global rows have no per-channel lookup).
+    #[test]
+    fn project_row_communities_channelless_uses_resolved() {
+        let resolved = CommunityLabel::from_uuid(Uuid::from_u128(0x42));
+        let lookup = std::collections::HashMap::new();
+        let rows = vec![None, None];
+
+        let projection = project_row_communities(&rows, &resolved, &lookup);
+        match projection {
+            RowCommunityProjection::Ok(labels) => {
+                assert_eq!(labels.len(), 2);
+                assert!(
+                    labels.iter().all(|l| l == &resolved),
+                    "all channel-less rows must project to resolved"
+                );
+            }
+            RowCommunityProjection::MissingLookup { .. } => {
+                panic!("channel-less rows must not surface missing-lookup")
+            }
+        }
+    }
+
+    /// Channel-scoped row with a foreign community in the lookup map
+    /// projects to the foreign label — independent of the fetch query
+    /// (this is the (B) strategy's non-tautological correctness). The
+    /// resolved community is NOT substituted.
+    #[test]
+    fn project_row_communities_channel_scoped_uses_lookup_label() {
+        use buzz_core::CommunityId;
+        let resolved = CommunityLabel::from_uuid(Uuid::from_u128(0xA));
+        let foreign = Uuid::from_u128(0xF0);
+        let ch_id = Uuid::from_u128(0xC0);
+        let mut lookup = std::collections::HashMap::new();
+        lookup.insert(ch_id, CommunityId::from_uuid(foreign));
+
+        let projection = project_row_communities(&[Some(ch_id)], &resolved, &lookup);
+        match projection {
+            RowCommunityProjection::Ok(labels) => {
+                assert_eq!(labels.len(), 1);
+                assert_eq!(
+                    labels[0],
+                    CommunityLabel::from_uuid(foreign),
+                    "channel-scoped row must project to its OWN community, not resolved"
+                );
+                assert_ne!(labels[0], resolved, "must not substitute resolved");
+            }
+            other => panic!("expected Ok projection, got {other:?}"),
+        }
+    }
+
+    /// The guard-rail bite: a channel-scoped row whose channel id is
+    /// absent from the lookup map MUST surface as `MissingLookup`,
+    /// never as a silent substitution to resolved. This is what makes
+    /// the negative fixture (channel-scoped foreign-community row
+    /// masquerading as channel-less) fail closed.
+    #[test]
+    fn project_row_communities_channel_scoped_missing_is_breach() {
+        let resolved = CommunityLabel::from_uuid(Uuid::from_u128(0xA));
+        let ch_id = Uuid::from_u128(0xDEAD);
+        let lookup = std::collections::HashMap::new();
+
+        let projection = project_row_communities(&[Some(ch_id)], &resolved, &lookup);
+        match projection {
+            RowCommunityProjection::MissingLookup {
+                kind,
+                first_missing_channel,
+            } => {
+                assert_eq!(kind, "row_community_lookup_missing");
+                assert_eq!(first_missing_channel, ch_id);
+            }
+            RowCommunityProjection::Ok(labels) => {
+                panic!("missing lookup must be a breach, got Ok({labels:?})")
+            }
+        }
+    }
+
+    /// `record_read_message_rows` on a missing-lookup row must record
+    /// exactly one `ImplBug` step (not a `ReadMessageRows` with the
+    /// resolved label substituted). The checker treats `ImplBug` as a
+    /// coverage breach.
+    #[test]
+    fn record_read_message_rows_missing_lookup_emits_impl_bug() {
+        let typed = Arc::new(VecTracer::default());
+        let inner: Arc<dyn Tracer> = typed.clone();
+        let state = dummy_state();
+        let ch_id = Uuid::from_u128(0xDEAD);
+        let lookup = std::collections::HashMap::new();
+
+        record_read_message_rows(&inner, &state, Some(ch_id), &[Some(ch_id)], &lookup);
+
+        let steps = typed.steps.lock().expect("vec tracer mutex");
+        assert_eq!(steps.len(), 1);
+        match &steps[0].action {
+            TraceAction::ImplBug { kind } => {
+                assert_eq!(kind, "row_community_lookup_missing");
+            }
+            other => panic!("expected ImplBug coverage breach, got {other:?}"),
+        }
+    }
+
+    /// `record_read_by_id_rows` Happy path: channel-scoped row whose
+    /// lookup hits emits one `ReadByIdRows` with the per-row community
+    /// label, not the resolved one.
+    #[test]
+    fn record_read_by_id_rows_ok_emits_read_by_id_rows() {
+        use buzz_core::CommunityId;
+        let typed = Arc::new(VecTracer::default());
+        let inner: Arc<dyn Tracer> = typed.clone();
+        let state = dummy_state();
+        let foreign = Uuid::from_u128(0xF0);
+        let ch_id = Uuid::from_u128(0xC0);
+        let mut lookup = std::collections::HashMap::new();
+        lookup.insert(ch_id, CommunityId::from_uuid(foreign));
+
+        record_read_by_id_rows(&inner, &state, None, &[Some(ch_id)], &lookup);
+
+        let steps = typed.steps.lock().expect("vec tracer mutex");
+        assert_eq!(steps.len(), 1);
+        match &steps[0].action {
+            TraceAction::ReadByIdRows {
+                channel,
+                row_communities,
+            } => {
+                assert!(
+                    channel.is_none(),
+                    "search lane uses None for filter_channel"
+                );
+                assert_eq!(row_communities.len(), 1);
+                assert_eq!(row_communities[0], CommunityLabel::from_uuid(foreign));
+            }
+            other => panic!("expected ReadByIdRows, got {other:?}"),
         }
     }
 }
