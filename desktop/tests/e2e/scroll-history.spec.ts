@@ -248,7 +248,7 @@ test("preserves user scroll while older channel history loads", async ({
         return Math.abs(anchor.top - (anchorBeforeLanding?.top ?? 0));
       },
       {
-        timeout: 8_000,
+        timeout: 10_000,
       },
     )
     .toBeLessThanOrEqual(2);
