@@ -163,7 +163,7 @@ pub async fn search(pool: &PgPool, query: &SearchQuery) -> Result<SearchResult, 
     let Some(search_text) = normalized_search_text(&query.q) else {
         return Ok(SearchResult {
             hits: Vec::new(),
-            page: query.page.max(1).min(PAGE_MAX),
+            page: query.page.clamp(1, PAGE_MAX),
         });
     };
 
@@ -173,7 +173,7 @@ pub async fn search(pool: &PgPool, query: &SearchQuery) -> Result<SearchResult, 
     } else {
         per_page
     };
-    let page = query.page.max(1).min(PAGE_MAX);
+    let page = query.page.clamp(1, PAGE_MAX);
     let offset = ((page - 1) as i64) * (per_page_actual as i64);
 
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
