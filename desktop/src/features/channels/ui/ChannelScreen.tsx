@@ -876,10 +876,12 @@ export function ChannelScreen({
     setThreadReplyTargetId(null);
     handleCloseAgentSession();
     setProfilePanelPubkey(null);
+    handleSurfaceTabChange("messages");
     setChannelManagementOpen(true);
   }, [
     activeChannel?.channelType,
     channelManagementOpen,
+    handleSurfaceTabChange,
     openGlobalChannelManagement,
     setChannelManagementOpen,
     setOpenThreadHeadId,
