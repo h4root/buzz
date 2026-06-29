@@ -16,6 +16,10 @@ import {
   MSG_PREFIX,
   THREAD_PREFIX,
 } from "@/features/channels/readState/readStateFormat";
+import {
+  getDmAutoRouteAgentPubkeys,
+  mergeAutoRouteMentionPubkeys,
+} from "@/features/channels/ui/ChannelPane.helpers";
 import { ChannelScreenEmptyState } from "@/features/channels/ui/ChannelScreenEmptyState";
 import {
   ChannelScreenHeader,
@@ -25,10 +29,6 @@ import {
   ChannelPane,
   ForumView,
 } from "@/features/channels/ui/ChannelScreenLazyViews";
-import {
-  getDmAutoRouteAgentPubkeys,
-  getThreadAutoRouteAgentPubkeys,
-} from "@/features/channels/ui/ChannelPane.helpers";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
@@ -86,7 +86,6 @@ import { useChannelRouteTarget } from "./useChannelRouteTarget";
 import { useChannelUnreadState } from "./useChannelUnreadState";
 import { useResetChannelSurfaceTabOnRouteOpen } from "./useResetChannelSurfaceTabOnRouteOpen";
 import type { ChannelScreenProps } from "./ChannelScreen.types";
-
 const HEADER_ACTIONS_COMPACT_BREAKPOINT_PX = 760;
 export function ChannelScreen({
   activeChannel,
@@ -426,6 +425,24 @@ export function ChannelScreen({
     messageProfilesQuery.data?.profiles,
     relayAgents,
   ]);
+  const routingAgentPubkeys = React.useMemo(() => {
+    const pubkeys = new Set(agentPubkeys);
+    for (const [pubkey, profile] of Object.entries(messageProfiles)) {
+      if (profile?.isAgent) {
+        pubkeys.add(normalizePubkey(pubkey));
+      }
+    }
+    return pubkeys;
+  }, [agentPubkeys, messageProfiles]);
+  const dmAutoRouteAgentPubkeys = React.useMemo(
+    () =>
+      getDmAutoRouteAgentPubkeys({
+        channel: activeChannel,
+        currentPubkey,
+        knownAgentPubkeys: routingAgentPubkeys,
+      }),
+    [activeChannel, currentPubkey, routingAgentPubkeys],
+  );
   const personasQuery = usePersonasQuery();
   const { personaLookup, respondToLookup } = React.useMemo(() => {
     const agents = managedAgentsQuery.data ?? [];
@@ -529,37 +546,6 @@ export function ChannelScreen({
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
     [editTargetId, timelineMessages],
   );
-  const routingAgentPubkeys = React.useMemo(() => {
-    const pubkeys = new Set(agentPubkeys);
-    for (const [pubkey, profile] of Object.entries(messageProfiles)) {
-      if (profile?.isAgent) {
-        pubkeys.add(normalizePubkey(pubkey));
-      }
-    }
-    return pubkeys;
-  }, [agentPubkeys, messageProfiles]);
-  const messageAutoRouteAgentPubkeys = React.useMemo(
-    () =>
-      getDmAutoRouteAgentPubkeys({
-        channel: activeChannel,
-        currentPubkey,
-        knownAgentPubkeys: routingAgentPubkeys,
-      }),
-    [activeChannel, currentPubkey, routingAgentPubkeys],
-  );
-  const threadAutoRouteAgentPubkeys = React.useMemo(() => {
-    if (!openThreadHeadMessage) {
-      return [];
-    }
-
-    return getThreadAutoRouteAgentPubkeys({
-      knownAgentPubkeys: routingAgentPubkeys,
-      messages: [
-        openThreadHeadMessage,
-        ...threadMessages.map((entry) => entry.message),
-      ],
-    });
-  }, [openThreadHeadMessage, routingAgentPubkeys, threadMessages]);
   const {
     handleCancelEdit,
     handleCancelThreadReply,
@@ -577,7 +563,6 @@ export function ChannelScreen({
     deleteMessageMutation,
     editMessageMutation,
     editTargetId,
-    messageAutoRouteAgentPubkeys,
     expandedThreadReplyIds,
     getFirstReplyIdForMessage,
     getReplyDescendantIdsForMessage,
@@ -590,10 +575,26 @@ export function ChannelScreen({
     setOpenThreadHeadId,
     setThreadReplyTargetId,
     setThreadScrollTargetId,
-    threadAutoRouteAgentPubkeys,
     threadReplyTargetId,
     toggleReactionMutation,
   });
+  const handleSendMessageWithDmAutoRoute = React.useCallback(
+    async (
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags?: string[][],
+    ) => {
+      await handleSendMessage(
+        content,
+        mergeAutoRouteMentionPubkeys({
+          autoRouteAgentPubkeys: dmAutoRouteAgentPubkeys,
+          mentionPubkeys,
+        }),
+        mediaTags,
+      );
+    },
+    [dmAutoRouteAgentPubkeys, handleSendMessage],
+  );
   const effectiveToggleReaction = React.useMemo(
     () =>
       activeChannel && !activeChannel.archivedAt && activeChannel.isMember
@@ -1005,7 +1006,7 @@ export function ChannelScreen({
                   activeChannel={activeChannel}
                   activityAgents={channelAgentSessionAgents}
                   agentConversationMarkers={agentConversationMarkers}
-                  agentPubkeys={agentPubkeys}
+                  agentPubkeys={routingAgentPubkeys}
                   agentPubkeysPending={agentPubkeysPending}
                   agentSessionAgents={agentSessionAgents}
                   botTypingEntries={botTypingEntries}
@@ -1076,7 +1077,7 @@ export function ChannelScreen({
                   onCloseProfilePanel={handleCloseProfilePanel}
                   onOpenThread={handleOpenThreadAndCloseAgentSession}
                   onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
-                  onSendMessage={handleSendMessage}
+                  onSendMessage={handleSendMessageWithDmAutoRoute}
                   onSendVideoReviewComment={effectiveSendVideoReviewComment}
                   onSendThreadReply={handleSendThreadReply}
                   onThreadScrollTargetChange={setThreadScrollTargetId}

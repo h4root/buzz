@@ -1,4 +1,5 @@
 import type { ParsedAgentConversationLink } from "@/features/agents/agentConversationLink";
+import type { AgentConversationMarker } from "@/features/agents/agentConversations";
 import type { ParsedMessageLink } from "@/features/messages/lib/messageLink";
 import type { Channel } from "@/shared/api/types";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
@@ -26,6 +27,7 @@ export type MessageLinkPillProps = {
 
 export type MarkdownRuntime = {
   agentMentionPubkeysByName?: Record<string, string>;
+  agentConversationMarkers?: readonly AgentConversationMarker[];
   channels: Channel[];
   imetaByUrl?: ImetaLookup;
   linkPreviewHrefs: ReadonlySet<string>;
@@ -36,6 +38,7 @@ export type MarkdownRuntime = {
 };
 
 export type MarkdownProps = {
+  agentConversationMarkers?: readonly AgentConversationMarker[];
   channelNames?: string[];
   className?: string;
   content: string;

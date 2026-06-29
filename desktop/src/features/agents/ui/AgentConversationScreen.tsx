@@ -2,13 +2,14 @@ import * as React from "react";
 import { Bot, ChevronRight, Copy, createLucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
-import { buildAgentConversationLink } from "@/features/agents/agentConversationLink";
 import {
-  buildAgentConversationMentionPubkeys,
+  buildAgentConversationLink,
+  parseAgentConversationLink,
+} from "@/features/agents/agentConversationLink";
+import {
   buildAgentConversationMarkers,
   buildAgentConversationRecap,
   deriveAgentConversationTitle,
-  getAutoRoutedAgentConversationPubkeys,
   type AgentConversation,
   publishAgentConversationMarker,
 } from "@/features/agents/agentConversations";
@@ -498,10 +499,6 @@ export function AgentConversationScreen({
         .map((participant) => participant.pubkey),
     [agentParticipants],
   );
-  const autoRoutedAgentPubkeys = React.useMemo(
-    () => getAutoRoutedAgentConversationPubkeys(agentParticipants),
-    [agentParticipants],
-  );
   const canMessageAnyAgent = routeableAgentPubkeys.length > 0;
   const restrictedAgentNames = React.useMemo(
     () =>
@@ -573,15 +570,11 @@ export function AgentConversationScreen({
         ],
         content,
         mediaTags,
-        mentionPubkeys: buildAgentConversationMentionPubkeys({
-          autoRouteAgentPubkeys: autoRoutedAgentPubkeys,
-          mentionPubkeys,
-        }),
+        mentionPubkeys,
         parentEventId: replyParentEventId,
       });
     },
     [
-      autoRoutedAgentPubkeys,
       conversation.agentReply.id,
       replyParentEventId,
       sendMessageMutation,
@@ -734,6 +727,21 @@ export function AgentConversationScreen({
       toast.error("Failed to copy task link");
     }
   }, [channel?.id, conversation.agentReply.id, conversation.channelId]);
+  const getAgentConversationTitleForHref = React.useCallback(
+    (href: string) => {
+      const parsed = parseAgentConversationLink(href);
+      if (
+        !parsed.ok ||
+        parsed.value.channelId !== conversation.channelId ||
+        parsed.value.agentReplyId !== conversation.agentReply.id
+      ) {
+        return undefined;
+      }
+
+      return conversation.title;
+    },
+    [conversation.agentReply.id, conversation.channelId, conversation.title],
+  );
   const headerTitleTrailingContent = (
     <>
       <ChevronRight
@@ -795,6 +803,7 @@ export function AgentConversationScreen({
       />
 
       <MessageTimeline
+        agentConversationMarkers={agentConversationMarkers}
         agentPubkeys={agentPubkeys}
         channelId={channel?.id ?? conversation.channelId}
         channelIntro={{
@@ -836,6 +845,7 @@ export function AgentConversationScreen({
       >
         <div className="pointer-events-auto">
           <MessageComposer
+            agentConversationTitleForHref={getAgentConversationTitleForHref}
             channelId={channel?.id ?? conversation.channelId}
             channelName={channel?.name ?? conversation.channelName}
             channelType={channel?.channelType ?? "stream"}
