@@ -132,6 +132,19 @@ export function AgentConversationScreen({
     () => buildAgentConversationMarkers(relayMessages),
     [relayMessages],
   );
+  const currentConversationMarker = React.useMemo(
+    () =>
+      agentConversationMarkers.find(
+        (marker) =>
+          marker.channelId === conversation.channelId &&
+          marker.agentReplyId === conversation.agentReply.id,
+      ) ?? null,
+    [
+      agentConversationMarkers,
+      conversation.agentReply.id,
+      conversation.channelId,
+    ],
+  );
   const {
     getMessageReadAt,
     isThreadMuted,
@@ -403,21 +416,31 @@ export function AgentConversationScreen({
       derivedTitle.title,
       derivedTitle.status,
     );
-    void publishAgentConversationMarker({
-      agentName: conversation.agentName,
-      agentPubkey: conversation.agentPubkey,
-      agentReply: conversation.agentReply,
-      channel: {
-        id: conversation.channelId,
-        name: conversation.channelName,
+    void publishAgentConversationMarker(
+      {
+        agentName: conversation.agentName,
+        agentPubkey: conversation.agentPubkey,
+        agentReply: conversation.agentReply,
+        channel: {
+          id: conversation.channelId,
+          name: conversation.channelName,
+        },
+        contextMessages: conversationSourceMessages,
+        parentMessage,
+        threadRootMessage,
       },
-      contextMessages: conversationSourceMessages,
-      parentMessage,
-      threadRootMessage,
-    }).catch((error) => {
+      {
+        startedAt: currentConversationMarker?.startedAt ?? null,
+      },
+    ).catch((error) => {
       console.warn("[agentConversations] title marker publish failed:", error);
     });
-  }, [conversation, conversationSourceMessages, updateAgentConversationTitle]);
+  }, [
+    conversation,
+    conversationSourceMessages,
+    currentConversationMarker?.startedAt,
+    updateAgentConversationTitle,
+  ]);
   React.useEffect(() => {
     if (isThreadMuted(conversation.threadRootId)) {
       return;
@@ -491,19 +514,6 @@ export function AgentConversationScreen({
   React.useEffect(() => {
     lastPublishedThreadRecapRef.current = null;
   }, [conversation.id]);
-  const currentConversationMarker = React.useMemo(
-    () =>
-      agentConversationMarkers.find(
-        (marker) =>
-          marker.channelId === conversation.channelId &&
-          marker.agentReplyId === conversation.agentReply.id,
-      ) ?? null,
-    [
-      agentConversationMarkers,
-      conversation.agentReply.id,
-      conversation.channelId,
-    ],
-  );
   const generatedThreadRecap = React.useMemo(
     () =>
       buildAgentConversationRecap({
@@ -618,6 +628,7 @@ export function AgentConversationScreen({
           threadRootMessage: markerThreadRootMessage,
         },
         {
+          startedAt: currentConversationMarker?.startedAt ?? null,
           summary: nextRecap,
           summaryAuthorName:
             primaryRecapAgent?.displayName ?? conversation.agentName,
@@ -646,6 +657,7 @@ export function AgentConversationScreen({
     conversation.channelId,
     conversation.channelName,
     conversationSourceMessages,
+    currentConversationMarker?.startedAt,
     generatedThreadRecap,
     latestPublishedRecap,
     markerThreadRootMessage,

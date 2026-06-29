@@ -68,6 +68,7 @@ export type AgentConversationMarker = {
 };
 
 export type AgentConversationMarkerUpdate = {
+  startedAt?: number | null;
   summary?: string | null;
   summaryAuthorName?: string | null;
   summaryAuthorPubkey?: string | null;
@@ -582,7 +583,10 @@ export async function publishAgentConversationMarker(
   update: AgentConversationMarkerUpdate = {},
 ): Promise<RelayEvent> {
   const conversation = buildAgentConversation(input);
-  const startedAt = Math.floor(Date.now() / 1_000);
+  const startedAt =
+    typeof update.startedAt === "number" && Number.isFinite(update.startedAt)
+      ? update.startedAt
+      : Math.floor(Date.now() / 1_000);
   const parentMessageId = input.parentMessage?.id ?? null;
   const threadRootMessageId = input.threadRootMessage?.id ?? null;
   const summary = update.summary?.trim() || null;

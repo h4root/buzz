@@ -990,6 +990,10 @@ pub async fn start_managed_agent(
     // Snapshot the workspace owner pubkey for the legacy auth_tag fallback.
     // Read outside the records lock to keep lock ordering simple.
     let owner_hex = workspace_owner_hex(&state)?;
+    let refreshed_auth_tag = {
+        let owner_keys = state.keys.lock().map_err(|error| error.to_string())?;
+        crate::managed_agents::managed_agent_auth_tag_for_owner(&owner_keys, &pubkey)?
+    };
     enum StartTarget {
         Local,
         Provider {
@@ -1013,14 +1017,21 @@ pub async fn start_managed_agent(
 
         let (sync_changed, exited_pubkeys) =
             sync_managed_agent_processes(&mut records, &mut runtimes, &current_instance_id(&app));
-        if sync_changed {
-            save_managed_agents(&app, &records)?;
-        }
+        let mut records_changed = sync_changed;
         for pubkey in &exited_pubkeys {
             state.clear_session_cache(pubkey);
         }
 
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
+        if !crate::managed_agents::auth_tag_matches_owner(
+            record.auth_tag.as_deref(),
+            &record.pubkey,
+            Some(&owner_hex),
+        ) {
+            record.auth_tag = refreshed_auth_tag;
+            record.updated_at = crate::util::now_iso();
+            records_changed = true;
+        }
 
         // Resolve the effective harness for the avatar-fallback derivation in
         // profile reconcile (the create-time snapshot may be empty or stale for
@@ -1053,6 +1064,10 @@ pub async fn start_managed_agent(
                 agent_json: build_deploy_payload(&app, &state, record)?,
             }
         };
+
+        if records_changed {
+            save_managed_agents(&app, &records)?;
+        }
 
         (target, reconcile)
     };

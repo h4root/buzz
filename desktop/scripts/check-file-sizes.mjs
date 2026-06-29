@@ -61,7 +61,7 @@ const overrides = new Map([
   // commands add ~40 lines. Queued to split.
   // branch cut; override bumped to cover the merged total. Queued to split.
   // continued-agent-conversations: refreshes the owner auth tag before
-  // starting/restoring agents so staged identities keep working.
+  // starting/restoring/deploying agents so staged identities keep working.
   ["src-tauri/src/commands/agents.rs", 1437],
   // Residual repos_dir integration in ensure_nest_at: REPOS is provisioned
   // outside NEST_DIRS (it may be a symlink), so it needs its own create +
