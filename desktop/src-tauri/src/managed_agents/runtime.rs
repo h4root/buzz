@@ -1870,12 +1870,10 @@ pub fn spawn_agent_child(
         );
     }
 
-    // Baked-in Databricks defaults for internal builds (buzz-releases sets
-    // BUZZ_BUILD_DATABRICKS_* at compile time; OSS builds bake nothing).
+    // Baked-in provider defaults for internal builds (buzz-releases sets
+    // BUZZ_BUILD_BUZZ_AGENT_* at compile time; OSS builds bake nothing).
     // Written BEFORE user env_vars so a GUI/persona override still wins.
-    for (key, value) in build_databricks_defaults() {
-        command.env(key, value);
-    }
+    build_buzz_agent_provider_defaults(&mut command);
 
     // ── User env vars: the record snapshot ─────────────────────────────
     //
@@ -1953,21 +1951,50 @@ fn child_rust_log_filter() -> String {
     }
 }
 
-/// Databricks host/model baked in at compile time for internal builds. Empty
-/// in OSS builds, where the `BUZZ_BUILD_DATABRICKS_*` env is unset.
-pub(crate) fn build_databricks_defaults() -> Vec<(&'static str, &'static str)> {
-    let mut defaults = Vec::new();
-    if let Some(host) = option_env!("BUZZ_DESKTOP_BUILD_DATABRICKS_HOST") {
-        if !host.is_empty() {
-            defaults.push(("DATABRICKS_HOST", host));
+/// Provider/model baked in at compile time for internal builds. Empty
+/// in OSS builds, where the `BUZZ_BUILD_BUZZ_AGENT_*` env is unset.
+///
+/// Also injects any arbitrary `KEY=VALUE` pairs baked via `BUZZ_BUILD_AGENT_ENV`
+/// (newline-delimited). This is how provider-specific vars like `DATABRICKS_HOST`
+/// reach the agent in internal builds without naming them in OSS code.
+/// User-supplied env vars (written after this call) always win.
+pub(crate) fn build_buzz_agent_provider_defaults(cmd: &mut std::process::Command) {
+    if let Some(provider) = option_env!("BUZZ_DESKTOP_BUILD_BUZZ_AGENT_PROVIDER") {
+        if !provider.is_empty() {
+            cmd.env("BUZZ_AGENT_PROVIDER", provider);
         }
     }
-    if let Some(model) = option_env!("BUZZ_DESKTOP_BUILD_DATABRICKS_MODEL") {
+    if let Some(model) = option_env!("BUZZ_DESKTOP_BUILD_BUZZ_AGENT_MODEL") {
         if !model.is_empty() {
-            defaults.push(("DATABRICKS_MODEL", model));
+            cmd.env("BUZZ_AGENT_MODEL", model);
         }
     }
-    defaults
+    if let Some(raw) = option_env!("BUZZ_DESKTOP_BUILD_AGENT_ENV") {
+        for (key, value) in parse_agent_env_lines(raw) {
+            cmd.env(key, value);
+        }
+    }
+}
+
+/// Parse newline-delimited `KEY=VALUE` lines from a baked env blob.
+/// Blank lines are skipped. Each non-blank line must contain `=`; the key
+/// is everything before the first `=`, the value is everything after (values
+/// may themselves contain `=`). Lines with an empty key are skipped.
+pub(crate) fn parse_agent_env_lines(raw: &str) -> Vec<(&str, &str)> {
+    raw.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let eq = line.find('=')?;
+            let key = &line[..eq];
+            if key.is_empty() {
+                return None;
+            }
+            Some((key, &line[eq + 1..]))
+        })
+        .collect()
 }
 
 pub fn start_managed_agent_process(

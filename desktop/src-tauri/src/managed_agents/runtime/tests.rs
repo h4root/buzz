@@ -87,10 +87,86 @@ fn buzz_agent_has_mcp_hooks() {
 }
 
 #[test]
-fn databricks_defaults_empty_in_oss_build() {
-    // OSS (and normal test) builds set neither BUZZ_BUILD_DATABRICKS_*,
-    // so nothing is baked in and no DATABRICKS_* is injected on spawn.
-    assert!(super::build_databricks_defaults().is_empty());
+fn buzz_agent_provider_defaults_empty_in_oss_build() {
+    // OSS (and normal test) builds set neither BUZZ_BUILD_BUZZ_AGENT_*,
+    // so nothing is baked in and no BUZZ_AGENT_* is injected on spawn.
+    let mut cmd = std::process::Command::new("env");
+    super::build_buzz_agent_provider_defaults(&mut cmd);
+    // Verify the function injects nothing when the compile-time vars are absent.
+    let output = cmd.output().expect("env should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("BUZZ_AGENT_PROVIDER="),
+        "BUZZ_AGENT_PROVIDER should not be injected in OSS builds"
+    );
+    assert!(
+        !stdout.contains("BUZZ_AGENT_MODEL="),
+        "BUZZ_AGENT_MODEL should not be injected in OSS builds"
+    );
+    // BUZZ_DESKTOP_BUILD_AGENT_ENV is also absent in OSS builds — no
+    // arbitrary keys should appear from the generic passthrough either.
+    assert!(
+        !stdout.contains("DATABRICKS_HOST="),
+        "DATABRICKS_HOST should not be injected in OSS builds"
+    );
+}
+
+// ── parse_agent_env_lines tests ──────────────────────────────────────────
+
+use super::parse_agent_env_lines;
+
+#[test]
+fn parse_agent_env_lines_splits_on_first_equals() {
+    // Value may itself contain `=` — only the first `=` is the separator.
+    let pairs = parse_agent_env_lines("DATABRICKS_HOST=https://host.example.com/path?a=1");
+    assert_eq!(
+        pairs,
+        vec![("DATABRICKS_HOST", "https://host.example.com/path?a=1")]
+    );
+}
+
+#[test]
+fn parse_agent_env_lines_multiple_pairs() {
+    let raw = "KEY_A=value_a\nKEY_B=value_b";
+    let pairs = parse_agent_env_lines(raw);
+    assert_eq!(pairs, vec![("KEY_A", "value_a"), ("KEY_B", "value_b")]);
+}
+
+#[test]
+fn parse_agent_env_lines_skips_blank_lines() {
+    let raw = "KEY_A=val_a\n\n   \nKEY_B=val_b";
+    let pairs = parse_agent_env_lines(raw);
+    assert_eq!(pairs, vec![("KEY_A", "val_a"), ("KEY_B", "val_b")]);
+}
+
+#[test]
+fn parse_agent_env_lines_skips_line_without_equals() {
+    // A malformed line (no `=`) is silently skipped — build.rs validates at
+    // compile time; runtime parsing is defensive.
+    let raw = "NO_EQUALS_HERE\nGOOD=value";
+    let pairs = parse_agent_env_lines(raw);
+    assert_eq!(pairs, vec![("GOOD", "value")]);
+}
+
+#[test]
+fn parse_agent_env_lines_skips_empty_key() {
+    // `=value` has an empty key — skip it.
+    let raw = "=orphan_value\nGOOD=value";
+    let pairs = parse_agent_env_lines(raw);
+    assert_eq!(pairs, vec![("GOOD", "value")]);
+}
+
+#[test]
+fn parse_agent_env_lines_empty_value_is_allowed() {
+    // `KEY=` is valid — empty value is intentional (clears an env var).
+    let pairs = parse_agent_env_lines("EMPTY=");
+    assert_eq!(pairs, vec![("EMPTY", "")]);
+}
+
+#[test]
+fn parse_agent_env_lines_empty_input_returns_empty() {
+    assert!(parse_agent_env_lines("").is_empty());
+    assert!(parse_agent_env_lines("   \n  \n").is_empty());
 }
 
 #[test]
