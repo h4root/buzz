@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   buildAgentConversation,
+  buildAgentConversationMentionPubkeys,
   buildAgentConversationRecap,
   buildAgentConversationMarkers,
   deriveAgentConversationTitle,
+  getAutoRoutedAgentConversationPubkeys,
   getHiddenAgentConversationMessageIds,
   parseAgentConversationMarker,
   readPersistedAgentConversations,

@@ -6,6 +6,7 @@ import {
   KIND_AGENT_CONVERSATION,
   KIND_AGENT_CONVERSATION_COMPAT,
 } from "@/shared/constants/kinds";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { parseAgentConversationLink } from "./agentConversationLink";
 import {
   collectConversationContextMessages,
@@ -79,6 +80,11 @@ export type AgentConversationRecapInput = {
   agentPubkeys: ReadonlySet<string> | readonly string[];
   conversationTitle?: string | null;
   messages: readonly TimelineMessage[];
+};
+
+export type AgentConversationRouteableParticipant = {
+  canMessage: boolean;
+  pubkey: string;
 };
 
 function normalizeAgentConversationStorageScope(

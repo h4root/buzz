@@ -215,7 +215,6 @@ export function ChannelTasksView({
         const resolvedThreadMessage =
           messageById.get(marker.threadRootMessageId ?? "") ??
           messageById.get(marker.threadRootId) ??
-          messageById.get(marker.parentMessageId ?? "") ??
           null;
         const isBroadcastTaskSource = message
           ? isBroadcastReply(message.tags ?? [])
