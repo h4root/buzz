@@ -17,6 +17,7 @@ import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { RemindersPanel } from "@/features/reminders/ui/RemindersPanel";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -97,6 +98,7 @@ function ActivityLabel({
 
 type InboxListPaneProps = {
   activeReminderEventIds?: ReadonlySet<string>;
+  agentPubkeys?: ReadonlySet<string>;
   doneSet: ReadonlySet<string>;
   filter: InboxFilter;
   items: InboxItem[];
@@ -116,6 +118,7 @@ type InboxListPaneProps = {
 
 export function InboxListPane({
   activeReminderEventIds,
+  agentPubkeys,
   doneSet,
   filter,
   items,
@@ -154,6 +157,9 @@ export function InboxListPane({
     const hasActiveReminder = activeReminderEventIds?.has(item.id) ?? false;
     const hasChannelTarget = Boolean(item.item.channelId);
     const typeLabel = getInboxTypeLabel(item);
+    const isSenderAgent =
+      agentPubkeys?.has(normalizePubkey(item.item.pubkey)) === true;
+    const profileRole = isSenderAgent ? "bot" : undefined;
     const rowHighlightColor = isSelected
       ? "color-mix(in srgb, hsl(var(--background)) 70%, hsl(var(--muted)) 30%)"
       : "color-mix(in srgb, hsl(var(--background)) 75%, hsl(var(--muted)) 25%)";
@@ -188,11 +194,16 @@ export function InboxListPane({
           <div className="relative flex min-w-0 items-start gap-2.5">
             <div className="relative shrink-0">
               <UserProfilePopover
+                botIdenticonValue={item.senderLabel}
                 enableProfilePanel={false}
                 pubkey={item.item.pubkey}
+                role={profileRole}
                 triggerElement="span"
               >
-                <span className="inline-flex shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+                <span
+                  className="inline-flex shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                  data-testid={`home-inbox-item-avatar-${item.id}`}
+                >
                   <UserAvatar
                     avatarUrl={item.avatarUrl}
                     className="h-9 w-9"
@@ -207,8 +218,10 @@ export function InboxListPane({
               <div className="flex min-w-0 items-start gap-2">
                 <span className="min-w-0 flex-1">
                   <UserProfilePopover
+                    botIdenticonValue={item.senderLabel}
                     enableProfilePanel={false}
                     pubkey={item.item.pubkey}
+                    role={profileRole}
                     triggerElement="span"
                   >
                     <span className="block max-w-full truncate rounded text-sm font-semibold leading-4 text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">

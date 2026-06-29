@@ -8,6 +8,7 @@ import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Markdown } from "@/shared/ui/markdown";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
@@ -31,6 +32,7 @@ function toTimelineMessage(message: InboxDisplayMessage): TimelineMessage {
 }
 
 type InboxMessageRowProps = {
+  agentPubkeys?: ReadonlySet<string>;
   canReply: boolean;
   /** Channel UUID for "Copy link" — passed straight through to MessageActionBar. */
   channelId?: string | null;
@@ -45,6 +47,7 @@ type InboxMessageRowProps = {
 };
 
 export function InboxMessageRow({
+  agentPubkeys,
   canReply,
   channelId = null,
   isFocusHighlightVisible,
@@ -70,6 +73,9 @@ export function InboxMessageRow({
     errorMessage: reactionErrorMessage,
     select: handleReactionSelect,
   } = useReactionHandler(timelineMessage, onToggleReaction);
+  const isAuthorAgent =
+    agentPubkeys?.has(normalizePubkey(message.authorPubkey)) === true;
+  const profileRole = isAuthorAgent ? "bot" : undefined;
 
   return (
     <div className="relative px-5 py-2">
@@ -117,7 +123,9 @@ export function InboxMessageRow({
 
         <div className="relative shrink-0">
           <UserProfilePopover
+            botIdenticonValue={message.authorLabel}
             pubkey={message.authorPubkey}
+            role={profileRole}
             triggerElement="span"
           >
             <span className="inline-flex shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
@@ -134,7 +142,9 @@ export function InboxMessageRow({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0">
             <UserProfilePopover
+              botIdenticonValue={message.authorLabel}
               pubkey={message.authorPubkey}
+              role={profileRole}
               triggerElement="span"
             >
               <span className="block max-w-full truncate rounded text-sm font-semibold text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
