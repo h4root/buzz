@@ -6,6 +6,7 @@ import { MessageActionBar } from "@/features/messages/ui/MessageActionBar";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
+import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { cn } from "@/shared/lib/cn";
 import { Markdown } from "@/shared/ui/markdown";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -22,6 +23,7 @@ function toTimelineMessage(message: InboxDisplayMessage): TimelineMessage {
     body: message.content,
     createdAt: 0,
     depth: message.depth,
+    pubkey: message.authorPubkey,
     reactions: message.reactions ?? [],
     tags: message.tags,
     time: message.fullTimestampLabel,
@@ -114,19 +116,31 @@ export function InboxMessageRow({
         ) : null}
 
         <div className="relative shrink-0">
-          <UserAvatar
-            avatarUrl={message.avatarUrl}
-            className="h-9 w-9 shrink-0"
-            displayName={message.authorLabel}
-            size="md"
-          />
+          <UserProfilePopover
+            pubkey={message.authorPubkey}
+            triggerElement="span"
+          >
+            <span className="inline-flex shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+              <UserAvatar
+                avatarUrl={message.avatarUrl}
+                className="h-9 w-9 shrink-0"
+                displayName={message.authorLabel}
+                size="md"
+              />
+            </span>
+          </UserProfilePopover>
         </div>
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0">
-            <p className="truncate text-sm font-semibold text-foreground">
-              {message.authorLabel}
-            </p>
+            <UserProfilePopover
+              pubkey={message.authorPubkey}
+              triggerElement="span"
+            >
+              <span className="block max-w-full truncate rounded text-sm font-semibold text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+                {message.authorLabel}
+              </span>
+            </UserProfilePopover>
             <p className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground/55">
               {message.fullTimestampLabel}
             </p>

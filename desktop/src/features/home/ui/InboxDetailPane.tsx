@@ -185,6 +185,7 @@ export function InboxDetailPane({
       : [
           {
             authorLabel: item.senderLabel,
+            authorPubkey: item.item.pubkey,
             avatarUrl: item.avatarUrl,
             content: item.preview,
             depth: 0,

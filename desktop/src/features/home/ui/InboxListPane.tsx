@@ -13,6 +13,7 @@ import {
   type InboxItem,
   type InboxTypeLabel,
 } from "@/features/home/lib/inbox";
+import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { RemindersPanel } from "@/features/reminders/ui/RemindersPanel";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
@@ -186,19 +187,35 @@ export function InboxListPane({
           />
           <div className="relative flex min-w-0 items-start gap-2.5">
             <div className="relative shrink-0">
-              <UserAvatar
-                avatarUrl={item.avatarUrl}
-                className="h-9 w-9"
-                displayName={item.senderLabel}
-                size="md"
-              />
+              <UserProfilePopover
+                enableProfilePanel={false}
+                pubkey={item.item.pubkey}
+                triggerElement="span"
+              >
+                <span className="inline-flex shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+                  <UserAvatar
+                    avatarUrl={item.avatarUrl}
+                    className="h-9 w-9"
+                    displayName={item.senderLabel}
+                    size="md"
+                  />
+                </span>
+              </UserProfilePopover>
             </div>
 
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-start gap-2">
-                <p className="min-w-0 flex-1 truncate text-sm font-semibold leading-4 text-foreground">
-                  {item.senderLabel}
-                </p>
+                <span className="min-w-0 flex-1">
+                  <UserProfilePopover
+                    enableProfilePanel={false}
+                    pubkey={item.item.pubkey}
+                    triggerElement="span"
+                  >
+                    <span className="block max-w-full truncate rounded text-sm font-semibold leading-4 text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+                      {item.senderLabel}
+                    </span>
+                  </UserProfilePopover>
+                </span>
                 <span
                   className={cn(
                     "flex shrink-0 items-center gap-1.5 text-xs leading-4 text-muted-foreground/70 transition-opacity group-hover/inbox-item:opacity-0 group-focus-within/inbox-item:opacity-0",

@@ -279,9 +279,12 @@ export function HomeView({
 
     return timelineMessages.map((message) => {
       const event = eventById.get(message.id);
+      const authorPubkey =
+        message.pubkey ?? event?.pubkey ?? selectedItem.item.pubkey;
       return {
         id: message.id,
         authorLabel: message.author,
+        authorPubkey,
         avatarUrl: message.avatarUrl ?? null,
         content: message.body,
         depth: event ? getContextMessageDepth(event, eventById) : message.depth,
@@ -604,6 +607,7 @@ export function HomeView({
                         pubkey: authorPubkey,
                       })
                     : "You",
+                  authorPubkey,
                   avatarUrl:
                     currentPubkey && feedProfiles
                       ? (feedProfiles[currentPubkey.trim().toLowerCase()]
