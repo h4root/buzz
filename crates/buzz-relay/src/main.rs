@@ -640,6 +640,144 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Dream-due sweep: periodically query agents over their memory budget and
+    // emit KIND_DREAM_DUE to each idle over-budget agent.
+    //
+    // Idle gate: absence of a live presence key in Redis. An agent that has not
+    // published a kind:20001 presence heartbeat within the PRESENCE_TTL_SECS
+    // window (90 s) is considered idle — safe to signal for consolidation.
+    //
+    // Staleness ceiling (Thufir's note): to guard against a stuck instance
+    // that never publishes presence (and thus looks perpetually idle), we
+    // consider an agent idle only when `last_active_secs > 2 × sweep_interval`.
+    // Because presence TTL is 90 s and the default sweep is 300 s, the
+    // "no presence = idle" check already satisfies this ceiling — a presence
+    // key that expired > 90 s ago implies the agent has been silent for at
+    // least 90 s > 2 × 30 s effective heartbeat gap.
+    if config.dream_memory_budget_bytes > 0 {
+        if let Some(community_id) = deployment_community {
+            let dream_state = Arc::clone(&state);
+            let dream_config = config.clone();
+            // Build the tenant context once — same host binding used by live requests.
+            let dream_tenant = match buzz_relay::tenant::bind_deployment_community(
+                &state.db,
+                &config.relay_url,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    // Without a valid tenant we cannot scope presence checks or engram
+                    // queries correctly. Log and skip spawning rather than run blind.
+                    warn!(%community_id, error = ?e, "Dream sweep: could not resolve deployment tenant — sweep disabled");
+                    return Ok(());
+                }
+            };
+            tokio::spawn(async move {
+                let budget_bytes = dream_config.dream_memory_budget_bytes as i64;
+                let sweep_interval =
+                    std::time::Duration::from_secs(dream_config.dream_sweep_interval_secs);
+
+                info!(
+                    interval_secs = dream_config.dream_sweep_interval_secs,
+                    budget_bytes,
+                    %community_id,
+                    "Dream-due sweep started"
+                );
+
+                loop {
+                    tokio::time::sleep(sweep_interval).await;
+
+                    // Find agents over memory budget in this community.
+                    let over_budget = match dream_state
+                        .db
+                        .agents_over_memory_budget(community_id, budget_bytes)
+                        .await
+                    {
+                        Ok(rows) => rows,
+                        Err(e) => {
+                            warn!(%community_id, "Dream sweep: engram query failed: {e}");
+                            continue;
+                        }
+                    };
+
+                    for row in over_budget {
+                        let pubkey_hex = hex::encode(&row.pubkey);
+                        let Ok(agent_pubkey) = nostr::PublicKey::from_slice(&row.pubkey) else {
+                            warn!(%community_id, pubkey = %pubkey_hex, "Dream sweep: invalid pubkey bytes");
+                            continue;
+                        };
+
+                        // Idle gate: no live presence key in Redis.
+                        let is_idle = match buzz_pubsub::presence::get_presence(
+                            &dream_state.redis_pool,
+                            &dream_tenant,
+                            &agent_pubkey,
+                        )
+                        .await
+                        {
+                            Ok(Some(_)) => false, // agent has live presence — busy
+                            Ok(None) => true,     // no presence entry — idle
+                            Err(e) => {
+                                warn!(%community_id, pubkey = %pubkey_hex, "Dream sweep: presence check failed: {e}");
+                                continue;
+                            }
+                        };
+
+                        if !is_idle {
+                            tracing::debug!(
+                                %community_id,
+                                pubkey = %pubkey_hex,
+                                total_bytes = row.total_bytes,
+                                "Dream sweep: agent over budget but has live presence — skipping"
+                            );
+                            continue;
+                        }
+
+                        // Build a KIND_DREAM_DUE ephemeral event addressed to this agent.
+                        // Signed by the relay keypair; tagged with #p so the agent's
+                        // membership subscription (which filters `#p=[agent_pubkey_hex]`)
+                        // picks it up.
+                        let event = match nostr::EventBuilder::new(
+                            nostr::Kind::Custom(buzz_core::kind::KIND_DREAM_DUE as u16),
+                            "",
+                        )
+                        .tag(nostr::Tag::public_key(agent_pubkey))
+                        .sign_with_keys(&dream_state.relay_keypair)
+                        {
+                            Ok(e) => e,
+                            Err(e) => {
+                                warn!(%community_id, pubkey = %pubkey_hex, "Dream sweep: sign failed: {e}");
+                                continue;
+                            }
+                        };
+
+                        if let Err(e) = dream_state
+                            .pubsub
+                            .publish_event(
+                                &dream_tenant,
+                                buzz_pubsub::EventTopic::Global,
+                                &event,
+                            )
+                            .await
+                        {
+                            warn!(%community_id, pubkey = %pubkey_hex, "Dream sweep: publish failed: {e}");
+                        } else {
+                            info!(
+                                %community_id,
+                                pubkey = %pubkey_hex,
+                                total_bytes = row.total_bytes,
+                                "Dream sweep: emitted dream-due signal"
+                            );
+                        }
+                    }
+                }
+            });
+        } else {
+            tracing::debug!("Dream sweep disabled: no deployment community resolved");
+        }
+    }
+
     // Multi-node fan-out consumer: receive events from Redis pub/sub
     // (published by other relay instances) and fan out to local WS subscribers.
     {

@@ -1693,11 +1693,20 @@ async fn tokio_main() -> Result<()> {
 
                             // Dream-due signal: relay tells us memory thresholds
                             // are exceeded and the agent is idle enough to consolidate.
-                            // Set the pending flag — actual dispatch happens in the
-                            // heartbeat tick arm (lowest priority).
+                            // Set the pending flag, then try to dispatch immediately
+                            // if the pool is idle (avoids heartbeat-arm starvation).
                             if kind_u32 == KIND_DREAM_DUE {
                                 tracing::info!(target: "dream", "received dream-due signal from relay");
                                 dream_pending = true;
+                                // Attempt immediate dispatch — no heartbeat tick needed.
+                                maybe_dispatch_dream(
+                                    &mut pool,
+                                    &ctx,
+                                    &mut queue,
+                                    &mut dream_in_flight,
+                                    &mut dream_pending,
+                                    heartbeat_in_flight,
+                                );
                                 continue;
                             }
 
@@ -1966,8 +1975,17 @@ async fn tokio_main() -> Result<()> {
                         }
                     } else if pool.any_idle() && !heartbeat_in_flight {
                         dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
-                    } else if pool.any_idle() && dream_pending && !dream_in_flight {
-                        dispatch_dream(&mut pool, &ctx, &mut dream_in_flight, &mut dream_pending);
+                        // After heartbeat fires, the pool may still have an idle
+                        // slot (multi-agent) or the heartbeat may already be
+                        // complete. Try dream in the idle gap.
+                        maybe_dispatch_dream(
+                            &mut pool,
+                            &ctx,
+                            &mut queue,
+                            &mut dream_in_flight,
+                            &mut dream_pending,
+                            heartbeat_in_flight,
+                        );
                     } else {
                         tracing::debug!("heartbeat_skipped_busy");
                     }
@@ -2064,6 +2082,16 @@ async fn tokio_main() -> Result<()> {
                 for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
                     typing_channels.insert(channel_id, thread_tags);
                 }
+                // After a prompt completes and dispatch_pending runs, the pool
+                // may be idle with dream pending — try to fill the idle gap.
+                maybe_dispatch_dream(
+                    &mut pool,
+                    &ctx,
+                    &mut queue,
+                    &mut dream_in_flight,
+                    &mut dream_pending,
+                    heartbeat_in_flight,
+                );
             }
             Some(PoolEvent::Panic(join_error)) => {
                 tracing::error!("agent task panicked: {join_error}");
@@ -2088,6 +2116,14 @@ async fn tokio_main() -> Result<()> {
                 for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
                     typing_channels.insert(channel_id, thread_tags);
                 }
+                maybe_dispatch_dream(
+                    &mut pool,
+                    &ctx,
+                    &mut queue,
+                    &mut dream_in_flight,
+                    &mut dream_pending,
+                    heartbeat_in_flight,
+                );
             }
             Some(PoolEvent::SteerAck(SteerAckEvent {
                 channel_id,
@@ -2944,6 +2980,37 @@ fn drain_ready_join_results(
     LoopAction::Continue
 }
 
+/// Dispatch a dream turn if the harness is in a fully idle state.
+///
+/// Guards:
+/// - No flushable queue work (pending work always wins over dream).
+/// - `dream_pending` is true (a `dream-due` signal was received).
+/// - `dream_in_flight` is false (no concurrent dream turn).
+/// - `heartbeat_in_flight` is false (preserve `pending > heartbeat > dream` priority).
+/// - At least one idle agent is available.
+/// - The dream prompt is loaded (missing prompt is handled by `dispatch_dream`).
+///
+/// Idempotent: safe to call at any state-transition point. If the guard
+/// conditions are not met, it returns immediately with no side effects.
+fn maybe_dispatch_dream(
+    pool: &mut AgentPool,
+    ctx: &Arc<PromptContext>,
+    queue: &mut EventQueue,
+    dream_in_flight: &mut bool,
+    dream_pending: &mut bool,
+    heartbeat_in_flight: bool,
+) {
+    if !*dream_pending
+        || *dream_in_flight
+        || heartbeat_in_flight
+        || queue.has_flushable_work()
+        || !pool.any_idle()
+    {
+        return;
+    }
+    dispatch_dream(pool, ctx, dream_in_flight, dream_pending);
+}
+
 fn dispatch_heartbeat(
     pool: &mut AgentPool,
     ctx: &Arc<PromptContext>,
@@ -3011,7 +3078,8 @@ fn default_heartbeat_prompt() -> String {
 ///
 /// Looks for `.agents/skills/dream/SKILL.md` relative to the current working
 /// directory (which is `~/.buzz` when the harness runs under the desktop app).
-/// Returns `None` if the file doesn't exist — dream dispatch becomes a no-op.
+/// Returns `None` if the file doesn't exist — callers treat this as a
+/// startup-visible error when a dream-due signal arrives.
 fn load_dream_prompt() -> Option<String> {
     let path = std::path::Path::new(".agents/skills/dream/SKILL.md");
     match std::fs::read_to_string(path) {
@@ -3055,7 +3123,18 @@ fn dispatch_dream(
     let prompt_text = match ctx.dream_prompt.as_ref() {
         Some(p) => p.clone(),
         None => {
-            // No dream prompt configured — return agent and clear pending.
+            // Dream prompt is missing — this is a configuration error when dream-due
+            // signals are being received. The scaffolder should have written
+            // .agents/skills/dream/SKILL.md at Nest init. Log an error so the
+            // operator can diagnose the missing file; clear pending so we don't
+            // retry on every signal (the prompt won't appear until restart).
+            tracing::error!(
+                target: "dream",
+                "dream-due signal received but dream skill prompt is not loaded — \
+                 .agents/skills/dream/SKILL.md is missing. \
+                 Reinstall the Buzz app or recreate the Nest to restore it. \
+                 Dream dispatch disabled until restart."
+            );
             pool.return_agent(agent);
             *dream_pending = false;
             return;
@@ -4352,5 +4431,246 @@ mod observer_payload_trim_tests {
         assert!(leaf.starts_with('…'));
         assert!(leaf.ends_with('…'));
         assert!(leaf.contains("[elided"));
+    }
+}
+
+#[cfg(test)]
+mod dream_dispatch_tests {
+    //! Unit tests for `maybe_dispatch_dream` guard logic and `dispatch_dream`
+    //! missing-prompt handling.
+    //!
+    //! These tests exercise the state-flag contract: which conditions allow
+    //! dream dispatch through, and what happens when the dream prompt is absent.
+    //!
+    //! **Starvation regression:** Thufir found that the old code made dream
+    //! reachable only when a heartbeat was already in-flight (IMPORTANT finding).
+    //! Tests here pin:
+    //!   - heartbeat_disabled: dream still dispatches (guard allows it)
+    //!   - heartbeat_in_flight: dream is blocked (priority ordering respected)
+    //!   - missing prompt: `dream_pending` cleared, agent returned, no `dream_in_flight`
+
+    use super::*;
+    use crate::acp::AcpClient;
+    use crate::pool::{AgentPool, OwnedAgent, PromptContext};
+    use crate::queue::EventQueue;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Build a minimal `PromptContext` with dream_prompt set to `prompt_text`.
+    fn ctx_with_dream_prompt(prompt_text: Option<String>) -> Arc<PromptContext> {
+        Arc::new(PromptContext {
+            mcp_servers: vec![],
+            initial_message: None,
+            idle_timeout: Duration::from_secs(60),
+            max_turn_duration: Duration::from_secs(3600),
+            turn_liveness_interval: Duration::ZERO,
+            dedup_mode: config::DedupMode::Queue,
+            system_prompt: None,
+            heartbeat_prompt: None,
+            base_prompt: None,
+            cwd: ".".into(),
+            rest_client: relay::RestClient {
+                http: reqwest::Client::new(),
+                base_url: "http://localhost:0".into(),
+                keys: nostr::Keys::generate(),
+                auth_tag_json: None,
+            },
+            channel_info: HashMap::new(),
+            context_message_limit: 0,
+            max_turns_per_session: 0,
+            permission_mode: config::PermissionMode::BypassPermissions,
+            agent_keys: nostr::Keys::generate(),
+            agent_owner_pubkey: None,
+            memory_enabled: false,
+            dream_prompt: prompt_text,
+        })
+    }
+
+    /// Spawn an inert agent (`cat`) to use as a pool occupant. The dream dispatch
+    /// tests never actually talk to the subprocess — it's just a handle.
+    async fn dummy_agent(index: usize) -> OwnedAgent {
+        OwnedAgent {
+            index,
+            acp: AcpClient::spawn("cat", &[], &[])
+                .await
+                .expect("spawn cat as inert agent"),
+            state: Default::default(),
+            model_capabilities: None,
+            desired_model: None,
+            protocol_version: 1,
+        }
+    }
+
+    // ─── Guard: dream_pending=false ────────────────────────────────────────────
+
+    /// When `dream_pending` is false, `maybe_dispatch_dream` must not set
+    /// `dream_in_flight` regardless of pool availability.
+    #[tokio::test]
+    async fn test_maybe_dispatch_dream_no_op_when_not_pending() {
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![Some(agent)]);
+        let ctx = ctx_with_dream_prompt(Some("consolidate memory".into()));
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let mut dream_in_flight = false;
+        let mut dream_pending = false; // ← not pending
+
+        maybe_dispatch_dream(
+            &mut pool,
+            &ctx,
+            &mut queue,
+            &mut dream_in_flight,
+            &mut dream_pending,
+            false, // heartbeat_in_flight
+        );
+
+        assert!(!dream_in_flight, "must not set dream_in_flight when not pending");
+        assert!(!dream_pending, "dream_pending must remain false");
+        // Pool must still have the idle agent (not claimed).
+        assert!(pool.any_idle(), "agent must not be consumed when guard blocks");
+    }
+
+    // ─── Guard: heartbeat_in_flight=true (priority ordering) ──────────────────
+
+    /// When a heartbeat is in flight, `maybe_dispatch_dream` must yield
+    /// (`heartbeat > dream` priority). This was the starvation failure mode
+    /// with single-agent pools: heartbeat won every tick, dream never fired.
+    #[tokio::test]
+    async fn test_maybe_dispatch_dream_blocked_while_heartbeat_in_flight() {
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![Some(agent)]);
+        let ctx = ctx_with_dream_prompt(Some("consolidate memory".into()));
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let mut dream_in_flight = false;
+        let mut dream_pending = true;
+
+        maybe_dispatch_dream(
+            &mut pool,
+            &ctx,
+            &mut queue,
+            &mut dream_in_flight,
+            &mut dream_pending,
+            true, // heartbeat_in_flight — must block dream
+        );
+
+        assert!(!dream_in_flight, "dream must not fire while heartbeat is in flight");
+        assert!(dream_pending, "dream_pending must remain true after guard blocked it");
+        assert!(pool.any_idle(), "agent must not be consumed by a blocked dispatch");
+    }
+
+    // ─── Guard: heartbeat disabled (heartbeat_in_flight=false always) ─────────
+
+    /// Regression for Thufir's starvation finding #1: when heartbeat is disabled
+    /// (`heartbeat_interval_secs == 0`), the heartbeat arm is never active, so
+    /// `heartbeat_in_flight` is always false. Dream must still dispatch when
+    /// all other guards pass.
+    #[tokio::test]
+    async fn test_maybe_dispatch_dream_fires_when_heartbeat_disabled() {
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![Some(agent)]);
+        let ctx = ctx_with_dream_prompt(Some("consolidate memory".into()));
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let mut dream_in_flight = false;
+        let mut dream_pending = true;
+
+        // heartbeat_in_flight=false simulates a deployment where
+        // heartbeat_interval_secs == 0 (heartbeat permanently disabled).
+        maybe_dispatch_dream(
+            &mut pool,
+            &ctx,
+            &mut queue,
+            &mut dream_in_flight,
+            &mut dream_pending,
+            false, // no heartbeat ever fires
+        );
+
+        assert!(dream_in_flight, "dream must dispatch when heartbeat is disabled");
+        assert!(!dream_pending, "dream_pending must clear after dispatch");
+        assert!(!pool.any_idle(), "agent must be claimed for the dream task");
+    }
+
+    // ─── Guard: no idle agents ─────────────────────────────────────────────────
+
+    /// When the pool has no idle agent, dispatch must not proceed.
+    #[tokio::test]
+    async fn test_maybe_dispatch_dream_blocked_when_pool_empty() {
+        let mut pool = AgentPool::from_slots(vec![None]); // slot exists but empty
+        let ctx = ctx_with_dream_prompt(Some("consolidate memory".into()));
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let mut dream_in_flight = false;
+        let mut dream_pending = true;
+
+        maybe_dispatch_dream(
+            &mut pool,
+            &ctx,
+            &mut queue,
+            &mut dream_in_flight,
+            &mut dream_pending,
+            false,
+        );
+
+        assert!(!dream_in_flight, "no dispatch without an idle agent");
+        assert!(dream_pending, "dream_pending preserved so next idle gap picks it up");
+    }
+
+    // ─── Fix 3: missing prompt clears pending, returns agent, logs error ───────
+
+    /// Regression for Thufir's finding #2: a missing dream prompt must NOT be a
+    /// silent per-signal drop. After Fix 3 the behavior is:
+    ///   - `dream_pending` is cleared (no retry loop).
+    ///   - The claimed agent is returned to the pool (no leak).
+    ///   - `dream_in_flight` remains false (no task is running).
+    ///
+    /// The error log is observable in production; we assert the state contract
+    /// here and rely on the `tracing::error!` call for operator visibility.
+    #[tokio::test]
+    async fn test_dispatch_dream_missing_prompt_clears_pending_returns_agent() {
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![Some(agent)]);
+        let ctx = ctx_with_dream_prompt(None); // no SKILL.md loaded
+        let mut dream_in_flight = false;
+        let mut dream_pending = true;
+
+        // Call dispatch_dream directly — this is the function that owns the
+        // missing-prompt branch (maybe_dispatch_dream defers to it).
+        dispatch_dream(&mut pool, &ctx, &mut dream_in_flight, &mut dream_pending);
+
+        assert!(!dream_in_flight, "no task is in flight when prompt is missing");
+        assert!(
+            !dream_pending,
+            "pending must be cleared so we don't retry on every subsequent signal"
+        );
+        assert!(
+            pool.any_idle(),
+            "agent must be returned to pool after missing-prompt early return"
+        );
+    }
+
+    // ─── dream_in_flight guard ─────────────────────────────────────────────────
+
+    /// If `dream_in_flight` is already true, `maybe_dispatch_dream` must not
+    /// launch a second concurrent dream task.
+    #[tokio::test]
+    async fn test_maybe_dispatch_dream_no_double_dispatch() {
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![Some(agent)]);
+        let ctx = ctx_with_dream_prompt(Some("consolidate memory".into()));
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let mut dream_in_flight = true; // already running
+        let mut dream_pending = true;
+
+        maybe_dispatch_dream(
+            &mut pool,
+            &ctx,
+            &mut queue,
+            &mut dream_in_flight,
+            &mut dream_pending,
+            false,
+        );
+
+        // dream_in_flight should stay true (not flipped back to false),
+        // and no second agent should be claimed.
+        assert!(dream_in_flight, "dream_in_flight state must not be toggled");
+        assert!(pool.any_idle(), "idle agent must not be claimed for a second dream");
     }
 }
