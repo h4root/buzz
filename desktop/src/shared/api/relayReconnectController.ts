@@ -194,11 +194,29 @@ export class RelayReconnectController {
       this.finish(onSuccess, true);
     };
 
+    // Subscribe FIRST. subscribeToConnectionState may invoke the listener
+    // synchronously with the current state (documented on the production
+    // implementation). If that sync emission resolves us, finish() runs and
+    // cancelTimers() cleans up the subscription handle before we reach the
+    // timer-install lines below.
     this.unsubscribeConnectionState = deps.subscribeToConnectionState(
       (state) => {
         if (state === "connected") onConnected();
       },
     );
+
+    // If the sync emission already finished the attempt, don't install timers
+    // that would live for the app lifetime. Also, cancelTimers() ran inside
+    // finish() before the return value of subscribeToConnectionState was
+    // assigned, so the subscription handle may not have been cleaned up yet —
+    // call unsubscribe now if it is still set.
+    if (resolved) {
+      if (this.unsubscribeConnectionState !== null) {
+        this.unsubscribeConnectionState();
+        this.unsubscribeConnectionState = null;
+      }
+      return false;
+    }
 
     this.pollIntervalId = deps.setInterval(() => {
       if (resolved || cancelled()) return;

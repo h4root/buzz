@@ -2,6 +2,10 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { SidebarRelayConnectionCompactCard } from "@/features/sidebar/ui/SidebarRelayConnectionCard";
+import {
+  getRelayConnectivitySuccessSnapshot,
+  subscribeRelayConnectivitySuccess,
+} from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { useReconnectRelay } from "@/shared/api/useReconnectRelay";
 import { cn } from "@/shared/lib/cn";
 import { isRelayUnreachableError } from "@/shared/lib/relayError";
@@ -46,6 +50,16 @@ function OnboardingRelayConnectionErrorCard({
   const wasSavingRef = React.useRef(isSaving);
   const isActionPending = isReconnectActionPending || isReconnectPending;
 
+  // Observe the shared relay-connectivity-success store. When the relay
+  // recovers during phase 3 (controller reconnects without a click return
+  // value), the sidebar and this card share the same success signal so the
+  // onboarding card also flips to success state.
+  const relayConnectivitySuccess = React.useSyncExternalStore(
+    subscribeRelayConnectivitySuccess,
+    () => getRelayConnectivitySuccessSnapshot(undefined),
+    () => false,
+  );
+
   React.useEffect(() => {
     return () => {
       if (successTimeoutRef.current !== null) {
@@ -76,6 +90,16 @@ function OnboardingRelayConnectionErrorCard({
       setDismissedErrorMessage(message);
     }, ONBOARDING_CONNECTIVITY_SUCCESS_AUTO_DISMISS_MS);
   }, [message]);
+
+  // When the shared relay-connectivity-success store signals success (set by
+  // either the sidebar's handleReconnectRelay or the auto-heal path), mark
+  // this card as successful too. This covers the phase-3 case where
+  // reconnect() returns false but the relay later becomes reachable.
+  React.useEffect(() => {
+    if (relayConnectivitySuccess) {
+      markSuccess();
+    }
+  }, [relayConnectivitySuccess, markSuccess]);
 
   const runConnectivityAction = React.useCallback(
     (runAction: () => Promise<boolean | undefined>) => {

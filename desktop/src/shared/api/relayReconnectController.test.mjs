@@ -469,3 +469,48 @@ test("OSS build (hookConfigured returns false) — runHook never called", async 
     "runHook not called in OSS build",
   );
 });
+
+// ── Synchronous connected emission ───────────────────────────────────────────
+
+test("sync connected emission — onSuccess fires once, no interval/backstop installed, subscription cleaned up", async () => {
+  const ctrl = new RelayReconnectController();
+
+  // subscribeToConnectionState fake that invokes the listener synchronously
+  // with "connected" BEFORE returning the cleanup handle. This models the
+  // production subscribeToConnectionState documented behaviour: it fires the
+  // listener with the current state before returning.
+  let cleanupCalled = false;
+  const deps = makeDeps({
+    preconnectResult: async () => {
+      throw new Error("relay unreachable");
+    },
+    hookConfiguredResult: async () => false,
+  });
+
+  // Override subscribeToConnectionState with the synchronous-emission fake.
+  deps.subscribeToConnectionState = mock.fn((listener) => {
+    // Invoke immediately — simulates "already connected" at subscribe time.
+    listener("connected");
+    // Return cleanup handle (production unsubscribe fn).
+    const cleanup = () => {
+      cleanupCalled = true;
+    };
+    return cleanup;
+  });
+
+  await ctrl.start(deps);
+
+  assert.equal(
+    deps.onSuccess.mock.calls.length,
+    1,
+    "onSuccess fires exactly once",
+  );
+  assert.equal(deps._intervals.length, 0, "no poll interval installed");
+  assert.equal(deps._timers.length, 0, "no backstop timer installed");
+  assert.equal(cleanupCalled, true, "subscription cleanup handle was called");
+  assert.deepEqual(
+    ctrl.getState(),
+    { isPending: false, isWaitingOnReconnectHook: false },
+    "state is idle after sync success",
+  );
+});
