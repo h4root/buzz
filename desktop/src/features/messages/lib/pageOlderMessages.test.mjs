@@ -151,3 +151,30 @@ test("frontier falls back to the oldest cached event when nothing is contiguous"
   ]);
   assert.equal(oldestContiguousHistoryTimestamp(healed), 500);
 });
+
+test("late island response never downgrades a contiguous copy (downgrade race)", () => {
+  const channelId = "island-downgrade-race";
+  // The event was missing when the ancestor fetch started, but a contiguous
+  // history page fetched it (unmarked) before the island response landed.
+  const contiguousCopy = event({
+    id: id("race", 0),
+    createdAt: 1_000,
+    channelId,
+  });
+  const cache = mergeTimelineHistoryMessages(
+    [],
+    [contiguousCopy, event({ id: id("new", 0), createdAt: 10_000, channelId })],
+  );
+
+  // Late ancestor/thread response for the same id must be a no-op — marking
+  // it here would re-poison the frontier that contiguous paging just fixed.
+  const merged = mergeNonContiguousTimelineMessages(cache, [
+    { ...contiguousCopy },
+  ]);
+
+  const kept = merged.find((e) => e.id === contiguousCopy.id);
+  assert.ok(!kept.nonContiguous, "island merge downgraded a contiguous copy");
+  assert.equal(oldestContiguousHistoryTimestamp(merged), 1_000);
+  // And the reverse direction: thread replies already contiguous stay put.
+  assert.equal(merged.length, cache.length);
+});
