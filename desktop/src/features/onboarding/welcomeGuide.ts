@@ -1,16 +1,17 @@
 import {
   addChannelMembers,
   createManagedAgent,
+  discoverAcpRuntimes,
   getChannelMembers,
   listManagedAgents,
 } from "@/shared/api/tauri";
 import { sendManagedAgentChannelMessage } from "@/shared/api/tauriManagedAgentMessages";
-import { listPersonas, setPersonaActive } from "@/shared/api/tauriPersonas";
-import type { ManagedAgent } from "@/shared/api/types";
+import { listAgentTemplates } from "@/shared/api/tauriManagedAgents";
+import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
 export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
-export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
+export const WELCOME_GUIDE_TEMPLATE_ID = "builtin:fizz";
 export const WELCOME_GUIDE_INTRO_MARKER = "buzz-welcome-intro.v1";
 const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
@@ -36,13 +37,6 @@ function isNamedWelcomeGuideAgent(agent: ManagedAgent) {
   );
 }
 
-function isBuiltInWelcomeGuideAgent(agent: ManagedAgent) {
-  return (
-    agent.personaId === WELCOME_GUIDE_PERSONA_ID &&
-    isNamedWelcomeGuideAgent(agent)
-  );
-}
-
 function isLegacyKitWelcomeGuideAgent(agent: ManagedAgent) {
   return (
     agent.name.trim().toLowerCase() ===
@@ -52,9 +46,7 @@ function isLegacyKitWelcomeGuideAgent(agent: ManagedAgent) {
 }
 
 function isWelcomeGuideAgent(agent: ManagedAgent) {
-  return (
-    isBuiltInWelcomeGuideAgent(agent) || isLegacyKitWelcomeGuideAgent(agent)
-  );
+  return isNamedWelcomeGuideAgent(agent) || isLegacyKitWelcomeGuideAgent(agent);
 }
 
 function pickAgentByStatus(agents: ManagedAgent[]) {
@@ -91,16 +83,18 @@ export async function getWelcomeGuideAgentPubkeys(relayUrl?: string | null) {
     .map((agent) => agent.pubkey);
 }
 
-async function ensureWelcomeGuidePersonaActive() {
-  const guidePersona = (await listPersonas()).find(
-    (persona) => persona.id === WELCOME_GUIDE_PERSONA_ID,
+async function resolveWelcomeGuideRuntime(
+  preferredRuntimeId: string | null,
+): Promise<AcpRuntime | null> {
+  const runtimes = (await discoverAcpRuntimes()).filter(
+    (runtime): runtime is AcpRuntime => runtime.availability === "available",
   );
-  if (!guidePersona) {
-    throw new Error(`${WELCOME_GUIDE_AGENT_NAME} persona not found.`);
+  if (runtimes.length === 0) {
+    return null;
   }
-  if (!guidePersona.isActive) {
-    await setPersonaActive(WELCOME_GUIDE_PERSONA_ID, true);
-  }
+  return (
+    runtimes.find((runtime) => runtime.id === preferredRuntimeId) ?? runtimes[0]
+  );
 }
 
 async function ensureWelcomeGuideAgent(relayUrl?: string | null) {
@@ -110,12 +104,26 @@ async function ensureWelcomeGuideAgent(relayUrl?: string | null) {
     return existing;
   }
 
-  await ensureWelcomeGuidePersonaActive();
+  // Create Fizz from the built-in agent template — no persona record.
+  const template = (await listAgentTemplates()).find(
+    (candidate) => candidate.id === WELCOME_GUIDE_TEMPLATE_ID,
+  );
+  if (!template) {
+    throw new Error(`${WELCOME_GUIDE_AGENT_NAME} template not found.`);
+  }
+
+  const runtime = await resolveWelcomeGuideRuntime(template.runtime);
 
   const created = await createManagedAgent({
     name: WELCOME_GUIDE_AGENT_NAME,
-    personaId: WELCOME_GUIDE_PERSONA_ID,
     relayUrl: relayUrl ?? undefined,
+    acpCommand: "buzz-acp",
+    agentCommand: runtime?.command,
+    agentArgs: runtime?.defaultArgs,
+    mcpCommand: runtime?.mcpCommand ?? undefined,
+    systemPrompt: template.systemPrompt,
+    avatarUrl: template.avatarUrl ?? undefined,
+    model: template.model ?? undefined,
     spawnAfterCreate: false,
     startOnAppLaunch: false,
     respondTo: "owner-only",

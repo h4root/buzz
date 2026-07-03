@@ -6,7 +6,6 @@ import {
   pickWelcomeGuideAgent,
   pickWelcomeGuideAgentForRelay,
   WELCOME_GUIDE_AGENT_NAME,
-  WELCOME_GUIDE_PERSONA_ID,
 } from "./welcomeGuide.ts";
 
 const PUB_A = "a".repeat(64);
@@ -61,10 +60,9 @@ test("pickWelcomeGuideAgent reuses a legacy Kit guide", () => {
   assert.equal(pickWelcomeGuideAgent([legacyKit]), legacyKit);
 });
 
-test("pickWelcomeGuideAgent prefers a running legacy guide over stopped builtin Fizz", () => {
+test("pickWelcomeGuideAgent prefers a running legacy guide over stopped Fizz", () => {
   const stoppedBuiltinFizz = makeAgent({
     pubkey: PUB_A,
-    personaId: WELCOME_GUIDE_PERSONA_ID,
     status: "stopped",
   });
   const runningLegacyKit = makeAgent({
@@ -88,7 +86,6 @@ test("pickWelcomeGuideAgent ignores non-Kit agents with the legacy prompt", () =
   });
   const fizz = makeAgent({
     pubkey: PUB_C,
-    personaId: WELCOME_GUIDE_PERSONA_ID,
   });
 
   assert.equal(pickWelcomeGuideAgent([nonKit, fizz]), fizz);
@@ -97,13 +94,11 @@ test("pickWelcomeGuideAgent ignores non-Kit agents with the legacy prompt", () =
 test("pickWelcomeGuideAgentForRelay ignores Fizz agents from other workspaces", () => {
   const otherWorkspaceFizz = makeAgent({
     pubkey: PUB_A,
-    personaId: WELCOME_GUIDE_PERSONA_ID,
     relayUrl: RELAY_A,
     status: "running",
   });
   const currentWorkspaceFizz = makeAgent({
     pubkey: PUB_B,
-    personaId: WELCOME_GUIDE_PERSONA_ID,
     relayUrl: RELAY_B,
     status: "stopped",
   });
@@ -120,7 +115,6 @@ test("pickWelcomeGuideAgentForRelay ignores Fizz agents from other workspaces", 
 test("pickWelcomeGuideAgentForRelay returns null when Fizz only exists in another workspace", () => {
   const otherWorkspaceFizz = makeAgent({
     pubkey: PUB_A,
-    personaId: WELCOME_GUIDE_PERSONA_ID,
     relayUrl: RELAY_A,
   });
 

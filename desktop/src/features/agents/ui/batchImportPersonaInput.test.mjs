@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildBatchImportPersonaInput } from "./batchImportPersonaInput.ts";
+import { buildBatchImportAgentInput } from "./batchImportPersonaInput.ts";
 
-function persona(overrides = {}) {
+function preview(overrides = {}) {
   return {
     displayName: "Imported Agent",
     avatarDataUrl: null,
@@ -18,29 +18,29 @@ function persona(overrides = {}) {
   };
 }
 
-test("buildBatchImportPersonaInput preserves provider from parsed personas", () => {
-  assert.deepEqual(buildBatchImportPersonaInput(persona()), {
-    displayName: "Imported Agent",
+test("buildBatchImportAgentInput preserves provider from parsed files", () => {
+  assert.deepEqual(buildBatchImportAgentInput(preview()), {
+    name: "Imported Agent",
     avatarUrl: undefined,
     systemPrompt: "Use the imported provider.",
     runtime: "goose",
     model: "claude-sonnet-4",
     provider: "anthropic",
-    namePool: undefined,
   });
 });
 
-test("buildBatchImportPersonaInput carries imported name pools", () => {
+test("buildBatchImportAgentInput uses the embedded avatar data url", () => {
   assert.deepEqual(
-    buildBatchImportPersonaInput(persona({ namePool: ["fizz", "buzz"] })),
+    buildBatchImportAgentInput(
+      preview({ avatarDataUrl: "data:image/png;base64,abc" }),
+    ),
     {
-      displayName: "Imported Agent",
-      avatarUrl: undefined,
+      name: "Imported Agent",
+      avatarUrl: "data:image/png;base64,abc",
       systemPrompt: "Use the imported provider.",
       runtime: "goose",
       model: "claude-sonnet-4",
       provider: "anthropic",
-      namePool: ["fizz", "buzz"],
     },
   );
 });

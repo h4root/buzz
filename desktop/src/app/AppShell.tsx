@@ -707,7 +707,9 @@ export function AppShell() {
                           onRemoveWorkspace={workspacesHook.removeWorkspace}
                           onSwitchWorkspace={workspacesHook.switchWorkspace}
                           onCreateAgent={() =>
-                            void goAgents().then(requestOpenCreateAgent)
+                            void goAgents().then(() => {
+                              requestOpenCreateAgent();
+                            })
                           }
                           selfPresenceStatus={presenceSession.currentStatus}
                           workspaces={workspacesHook.workspaces}

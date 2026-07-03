@@ -494,6 +494,7 @@ type RawTeam = {
   name: string;
   description: string | null;
   persona_ids: string[];
+  agent_pubkeys: string[];
   is_builtin: boolean;
   source_dir: string | null;
   is_symlink: boolean;
@@ -1696,8 +1697,9 @@ function resetMockTeams() {
     {
       id: "team-engineering-001",
       name: "Engineering",
-      description: "Core engineering personas",
+      description: "Core engineering agents",
       persona_ids: [],
+      agent_pubkeys: [],
       is_builtin: false,
       source_dir: null,
       is_symlink: false,
@@ -1711,6 +1713,7 @@ function resetMockTeams() {
       name: "Research Agents",
       description: "Directory-backed research team",
       persona_ids: [],
+      agent_pubkeys: [],
       is_builtin: false,
       source_dir: "/Users/dev/agents/research",
       is_symlink: false,
@@ -1724,6 +1727,7 @@ function resetMockTeams() {
       name: "Platform Tools",
       description: "Symlinked platform team",
       persona_ids: [],
+      agent_pubkeys: [],
       is_builtin: false,
       source_dir: "/Users/dev/agents/platform",
       is_symlink: true,
@@ -5863,9 +5867,7 @@ function ensureMockPersonaIsActive(personaId: string) {
     throw new Error(`persona ${personaId} not found`);
   }
   if (!persona.is_active) {
-    throw new Error(
-      `${persona.display_name} is not in My Agents. Choose it from Agent Catalog first.`,
-    );
+    throw new Error(`${persona.display_name} is not available for new agents.`);
   }
 }
 
@@ -5875,10 +5877,67 @@ function ensureMockPersonaIdsAreActive(personaIds: string[]) {
   }
 }
 
+type MockAgentTemplate = {
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  systemPrompt: string;
+  runtime: string | null;
+  model: string | null;
+  namePool: string[];
+};
+
+async function handleListAgentTemplates(): Promise<MockAgentTemplate[]> {
+  return [
+    {
+      id: "builtin:fizz",
+      displayName: "Fizz",
+      avatarUrl: null,
+      systemPrompt: "You are Fizz.",
+      runtime: "goose",
+      model: null,
+      namePool: ["Nectar", "Comet", "Bramble"],
+    },
+    {
+      id: "builtin:product-strategist",
+      displayName: "Product Strategist",
+      avatarUrl: BUILT_IN_PERSONA_AVATAR_URLS.productStrategist,
+      systemPrompt:
+        "You are a product strategy agent. You help turn broad ideas into clear product and design direction.",
+      runtime: null,
+      model: null,
+      namePool: ["Product Strategist"],
+    },
+    {
+      id: "builtin:qa-reviewer",
+      displayName: "QA Reviewer",
+      avatarUrl: BUILT_IN_PERSONA_AVATAR_URLS.qaReviewer,
+      systemPrompt:
+        "You are a QA reviewer agent. You look for the ways a change might break.",
+      runtime: null,
+      model: null,
+      namePool: ["QA Reviewer"],
+    },
+  ];
+}
+
+async function handleExportAgentToJson(args: {
+  pubkey: string;
+}): Promise<boolean> {
+  const agent = mockManagedAgents.find(
+    (candidate) => candidate.pubkey === args.pubkey,
+  );
+  if (!agent) {
+    throw new Error(`agent ${args.pubkey} not found`);
+  }
+  return true;
+}
+
 async function handleListTeams(): Promise<RawTeam[]> {
   return mockTeams.map((team) => ({
     ...team,
     persona_ids: [...team.persona_ids],
+    agent_pubkeys: [...team.agent_pubkeys],
   }));
 }
 
@@ -5887,6 +5946,7 @@ async function handleCreateTeam(args: {
     name: string;
     description?: string;
     personaIds: string[];
+    agentPubkeys?: string[];
   };
 }): Promise<RawTeam> {
   ensureMockPersonaIdsAreActive(args.input.personaIds);
@@ -5896,6 +5956,7 @@ async function handleCreateTeam(args: {
     name: args.input.name.trim(),
     description: args.input.description?.trim() || null,
     persona_ids: [...args.input.personaIds],
+    agent_pubkeys: [...(args.input.agentPubkeys ?? [])],
     is_builtin: false,
     source_dir: null,
     is_symlink: false,
@@ -5905,7 +5966,11 @@ async function handleCreateTeam(args: {
     updated_at: now,
   };
   mockTeams.push(team);
-  return { ...team, persona_ids: [...team.persona_ids] };
+  return {
+    ...team,
+    persona_ids: [...team.persona_ids],
+    agent_pubkeys: [...team.agent_pubkeys],
+  };
 }
 
 async function handleUpdateTeam(args: {
@@ -5914,6 +5979,7 @@ async function handleUpdateTeam(args: {
     name: string;
     description?: string;
     personaIds: string[];
+    agentPubkeys?: string[];
   };
 }): Promise<RawTeam> {
   const team = mockTeams.find((candidate) => candidate.id === args.input.id);
@@ -5925,9 +5991,14 @@ async function handleUpdateTeam(args: {
   team.name = args.input.name.trim();
   team.description = args.input.description?.trim() || null;
   team.persona_ids = [...args.input.personaIds];
+  team.agent_pubkeys = [...(args.input.agentPubkeys ?? [])];
   team.updated_at = new Date().toISOString();
 
-  return { ...team, persona_ids: [...team.persona_ids] };
+  return {
+    ...team,
+    persona_ids: [...team.persona_ids],
+    agent_pubkeys: [...team.agent_pubkeys],
+  };
 }
 
 async function handleDeleteTeam(args: { id: string }): Promise<void> {
@@ -5971,6 +6042,7 @@ async function handleInstallTeamFromDirectory(args: {
     name: "Installed Team",
     description: null,
     persona_ids: [],
+    agent_pubkeys: [],
     is_builtin: false,
     source_dir: args.path,
     is_symlink: args.symlink,
@@ -5980,7 +6052,11 @@ async function handleInstallTeamFromDirectory(args: {
     updated_at: now,
   };
   mockTeams.push(team);
-  return { ...team, persona_ids: [...team.persona_ids] };
+  return {
+    ...team,
+    persona_ids: [...team.persona_ids],
+    agent_pubkeys: [...team.agent_pubkeys],
+  };
 }
 
 async function handleSyncTeamDirectory(args: { teamId: string }): Promise<{
@@ -7775,6 +7851,10 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "export_persona_to_json":
         return handleExportPersonaToJson(payload as { id: string });
+      case "list_agent_templates":
+        return handleListAgentTemplates();
+      case "export_agent_to_json":
+        return handleExportAgentToJson(payload as { pubkey: string });
       case "list_managed_agents":
         return handleListManagedAgents(activeConfig);
       case "get_agent_memory":

@@ -115,7 +115,7 @@ function provenanceSentence(
     case "buzzExplicit":
       return "Set in Buzz";
     case "personaDefault":
-      return "Inherited from persona";
+      return "Inherited from agent profile";
     case "runtimeOverride":
       return "Live override (this session only)";
     case "harnessConstraint":

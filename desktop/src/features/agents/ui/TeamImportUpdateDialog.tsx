@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import type { ParsedTeamPreview } from "@/shared/api/tauriTeams";
-import type { AgentPersona, AgentTeam } from "@/shared/api/types";
+import type { AgentPersona, AgentTeam, ManagedAgent } from "@/shared/api/types";
 import { RemoveMembersConfirmDialog } from "./RemoveMembersConfirmDialog";
 import { buildTeamImportPlan } from "./teamImportPlan";
 import {
@@ -24,17 +24,17 @@ type TeamImportUpdateDialogProps = {
   open: boolean;
   team: AgentTeam | null;
   personas: AgentPersona[];
+  agents: ManagedAgent[];
   preview: ParsedTeamPreview | null;
   fileName: string;
   isPending: boolean;
   onClear: () => void;
   onOpenChange: (open: boolean) => void;
   onApply: (input: {
-    personas: AgentPersona[];
     updateTeamInfo: boolean;
-    selectedUpdatedPersonaIds: string[];
+    selectedUpdatedMemberIds: string[];
     selectedNewMemberIndexes: number[];
-    missingPersonaIdsToRemove: string[];
+    missingMemberIdsToRemove: string[];
     deleteRemovedAgents: boolean;
   }) => Promise<void>;
 };
@@ -43,6 +43,7 @@ export function TeamImportUpdateDialog({
   open,
   team,
   personas,
+  agents,
   preview,
   fileName,
   isPending,
@@ -64,8 +65,8 @@ export function TeamImportUpdateDialog({
     if (!team || !preview) {
       return null;
     }
-    return buildTeamImportPlan({ team, personas, preview });
-  }, [team, personas, preview]);
+    return buildTeamImportPlan({ team, personas, agents, preview });
+  }, [agents, team, personas, preview]);
 
   React.useEffect(() => {
     if (!open) {
@@ -132,11 +133,10 @@ export function TeamImportUpdateDialog({
     setErrorMessage(null);
     try {
       await onApply({
-        personas,
         updateTeamInfo,
-        selectedUpdatedPersonaIds: Array.from(selectedUpdatedPersonaIds),
+        selectedUpdatedMemberIds: Array.from(selectedUpdatedPersonaIds),
         selectedNewMemberIndexes: Array.from(selectedNewMemberIndexes),
-        missingPersonaIdsToRemove: Array.from(missingPersonaIdsToRemove),
+        missingMemberIdsToRemove: Array.from(missingPersonaIdsToRemove),
         deleteRemovedAgents,
       });
       setConfirmRemovalOpen(false);
@@ -590,11 +590,11 @@ export function TeamImportUpdateDialog({
                     </div>
                   )}
 
-                  {plan.unresolvedPersonaIds.length > 0 ? (
+                  {plan.unresolvedMemberIds.length > 0 ? (
                     <p className="rounded-lg border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
                       This team currently references{" "}
-                      {plan.unresolvedPersonaIds.length} missing member
-                      {plan.unresolvedPersonaIds.length === 1 ? "" : "s"} and
+                      {plan.unresolvedMemberIds.length} missing member
+                      {plan.unresolvedMemberIds.length === 1 ? "" : "s"} and
                       they cannot be updated by import.
                     </p>
                   ) : null}

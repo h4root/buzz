@@ -385,6 +385,8 @@ export type CreateManagedAgentInput = {
   systemPrompt?: string;
   avatarUrl?: string;
   model?: string;
+  /** LLM inference provider. A linked persona's snapshot provider wins. */
+  provider?: string;
   mcpToolsets?: string;
   envVars?: Record<string, string>;
   spawnAfterCreate?: boolean;
@@ -645,12 +647,30 @@ export type UpdatePersonaInput = {
   envVars?: Record<string, string>;
 };
 
+/**
+ * A built-in agent template: static starter data for the Create Agent
+ * wizard. Selecting a template prefills the create form — no persona record
+ * is created.
+ */
+export type AgentTemplate = {
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  systemPrompt: string;
+  runtime: string | null;
+  model: string | null;
+  namePool: string[];
+};
+
 // ── Team types ────────────────────────────────────────────────────────────────
 export type AgentTeam = {
   id: string;
   name: string;
   description: string | null;
+  /** Persona-backed members — pack-installed (directory-backed) teams only. */
   personaIds: string[];
+  /** Managed-agent members by pubkey — the primary membership for user teams. */
+  agentPubkeys: string[];
   isBuiltin: boolean;
   /** Absolute path to the team's backing directory (if directory-backed). */
   sourceDir: string | null;
@@ -668,6 +688,7 @@ export type CreateTeamInput = {
   name: string;
   description?: string;
   personaIds: string[];
+  agentPubkeys: string[];
 };
 
 export type UpdateTeamInput = {
@@ -675,6 +696,7 @@ export type UpdateTeamInput = {
   name: string;
   description?: string;
   personaIds: string[];
+  agentPubkeys: string[];
 };
 // ── Channel Template types ─────────────────────────────────────────────────────
 

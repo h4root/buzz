@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Info, Link, Users } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import type { AgentPersona } from "@/shared/api/types";
+import type { TeamCardMember } from "@/features/agents/lib/teamMembers";
 import { Card } from "@/shared/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { formatAgentModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
@@ -15,7 +15,7 @@ type TeamIdentityCardProps = {
   description?: string | null;
   isSymlink?: boolean;
   memberCount: number;
-  personas: AgentPersona[];
+  members: TeamCardMember[];
   sourceDir?: string | null;
   symlinkTarget?: string | null;
   teamName: string;
@@ -31,13 +31,13 @@ export function TeamIdentityCard({
   description,
   isSymlink = false,
   memberCount,
-  personas,
+  members,
   sourceDir,
   symlinkTarget,
   teamName,
   version,
 }: TeamIdentityCardProps) {
-  const footerModelLabel = getTeamFooterModelLabel(personas);
+  const footerModelLabel = getTeamFooterModelLabel(members);
   const trimmedDescription = description?.trim();
 
   return (
@@ -86,7 +86,7 @@ export function TeamIdentityCard({
 
         <TeamAvatarRow
           memberCount={memberCount}
-          personas={personas}
+          members={members}
           teamName={teamName}
         />
 
@@ -106,17 +106,17 @@ export function TeamIdentityCard({
 
 function TeamAvatarRow({
   memberCount,
-  personas,
+  members,
   teamName,
 }: {
   memberCount: number;
-  personas: AgentPersona[];
+  members: TeamCardMember[];
   teamName: string;
 }) {
-  const visiblePersonas = personas.slice(0, MAX_VISIBLE_MEMBER_AVATARS);
-  const overflowCount = Math.max(0, memberCount - visiblePersonas.length);
+  const visibleMembers = members.slice(0, MAX_VISIBLE_MEMBER_AVATARS);
+  const overflowCount = Math.max(0, memberCount - visibleMembers.length);
 
-  if (visiblePersonas.length === 0 && overflowCount === 0) {
+  if (visibleMembers.length === 0 && overflowCount === 0) {
     return (
       <div className="absolute inset-x-4 top-0 bottom-12 flex items-center justify-center">
         <div className="flex h-24 w-24 items-center justify-center rounded-full border border-border/65 bg-background/80 text-muted-foreground shadow-xs">
@@ -133,8 +133,8 @@ function TeamAvatarRow({
         className="flex max-w-full items-center justify-center gap-2 px-4"
         role="img"
       >
-        {visiblePersonas.map((persona, index) => (
-          <TeamAvatarItem index={index} key={persona.id} persona={persona} />
+        {visibleMembers.map((member, index) => (
+          <TeamAvatarItem index={index} key={member.key} member={member} />
         ))}
         {overflowCount > 0 ? (
           <span className="flex h-14 w-14 items-center justify-center rounded-full border-[3px] border-background bg-card text-sm font-semibold text-muted-foreground shadow-sm">
@@ -148,12 +148,12 @@ function TeamAvatarRow({
 
 function TeamAvatarItem({
   index,
-  persona,
+  member,
 }: {
   index: number;
-  persona: AgentPersona;
+  member: TeamCardMember;
 }) {
-  const avatarUrl = persona.avatarUrl?.trim() ?? null;
+  const avatarUrl = member.avatarUrl?.trim() ?? null;
 
   return (
     <div className="h-14 w-14" data-team-member-avatar="avatar">
@@ -162,13 +162,13 @@ function TeamAvatarItem({
           avatarUrl={avatarUrl}
           className="h-full w-full border-[3px] border-background bg-muted shadow-sm"
           iconClassName="h-6 w-6"
-          label={persona.displayName}
-          testId={`team-member-avatar-${persona.id}`}
+          label={member.displayName}
+          testId={`team-member-avatar-${member.id}`}
         />
       ) : (
         <IdentityInitialsAvatar
           colorIndex={index}
-          label={persona.displayName}
+          label={member.displayName}
           size={56}
         />
       )}
@@ -176,9 +176,9 @@ function TeamAvatarItem({
   );
 }
 
-function getTeamFooterModelLabel(personas: AgentPersona[]) {
-  const modelLabels = personas
-    .map((persona) => formatAgentModelLabel(persona.model))
+function getTeamFooterModelLabel(members: TeamCardMember[]) {
+  const modelLabels = members
+    .map((member) => formatAgentModelLabel(member.model))
     .filter((model): model is string => Boolean(model));
 
   if (modelLabels.length === 0) return "Auto";

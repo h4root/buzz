@@ -7,8 +7,10 @@ import {
 } from "@/shared/ui/import-status-icon";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { useAvailableAcpRuntimes } from "@/features/agents/hooks";
+import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
+import { createManagedAgent } from "@/shared/api/tauri";
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
-import { createPersona } from "@/shared/api/tauriPersonas";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import {
@@ -18,9 +20,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
-import { buildBatchImportPersonaInput } from "./batchImportPersonaInput";
+import { importedAvatarUrl } from "./agentDraft";
+import { buildBatchImportAgentInput } from "./batchImportPersonaInput";
 import { resolveManagedAgentAvatarUrl } from "./managedAgentAvatar";
-import { importedAvatarUrl } from "./personaDialogState";
 
 type BatchImportDialogProps = {
   fileName: string;
@@ -37,6 +39,7 @@ export function BatchImportDialog({
   onOpenChange,
   onComplete,
 }: BatchImportDialogProps) {
+  const runtimesQuery = useAvailableAcpRuntimes({ enabled: open });
   const [selected, setSelected] = React.useState<Set<number>>(new Set());
   const [status, setStatus] = React.useState<
     "idle" | "importing" | "done" | "error"
@@ -69,6 +72,16 @@ export function BatchImportDialog({
       return;
     }
 
+    const runtimes = runtimesQuery.data ?? [];
+    const defaultRuntime = runtimes[0] ?? null;
+    if (!defaultRuntime) {
+      setStatus("error");
+      setErrorMessage(
+        "No available agent runtime found. Visit Settings > Doctor to set one up.",
+      );
+      return;
+    }
+
     setStatus("importing");
     setErrorMessage(null);
 
@@ -82,8 +95,8 @@ export function BatchImportDialog({
     let completed = 0;
 
     for (const index of selected) {
-      const persona = result.personas[index];
-      if (!persona) {
+      const preview = result.personas[index];
+      if (!preview) {
         continue;
       }
 
@@ -94,9 +107,34 @@ export function BatchImportDialog({
       });
 
       try {
-        const input = buildBatchImportPersonaInput(persona);
-        const avatarUrl = await resolveManagedAgentAvatarUrl(input.avatarUrl);
-        await createPersona({ ...input, avatarUrl });
+        const input = buildBatchImportAgentInput(preview);
+        const resolved = resolvePersonaRuntime(
+          input.runtime ?? null,
+          runtimes,
+          defaultRuntime,
+        );
+        const runtime = resolved.runtime ?? defaultRuntime;
+        const avatarUrl = await resolveManagedAgentAvatarUrl(
+          input.avatarUrl,
+          undefined,
+          runtime.avatarUrl,
+        );
+        // Imported agents are created stopped so a large batch never spawns
+        // a fleet of processes at once.
+        await createManagedAgent({
+          name: input.name,
+          acpCommand: "buzz-acp",
+          agentCommand: runtime.command,
+          agentArgs: runtime.defaultArgs,
+          mcpCommand: runtime.mcpCommand ?? "",
+          systemPrompt: input.systemPrompt || undefined,
+          avatarUrl: avatarUrl || undefined,
+          model: input.model,
+          provider: input.provider,
+          spawnAfterCreate: false,
+          startOnAppLaunch: false,
+          backend: { type: "local" },
+        });
         completed += 1;
         setImportedCount(completed);
         setItemStatuses((prev) => {
@@ -112,7 +150,7 @@ export function BatchImportDialog({
         });
         setStatus("error");
         setErrorMessage(
-          `Imported ${completed} of ${selected.size}. Failed on '${persona.displayName}': ${error instanceof Error ? error.message : String(error)}. Already-imported personas are saved.`,
+          `Imported ${completed} of ${selected.size}. Failed on '${preview.displayName}': ${error instanceof Error ? error.message : String(error)}. Already-imported agents are saved.`,
         );
         return;
       }
@@ -131,9 +169,9 @@ export function BatchImportDialog({
       <DialogContent className="max-w-2xl overflow-hidden p-0">
         <div className="flex max-h-[85vh] flex-col">
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
-            <DialogTitle>Import Personas</DialogTitle>
+            <DialogTitle>Import agents</DialogTitle>
             <DialogDescription>
-              Found {personas.length} persona
+              Found {personas.length} agent
               {personas.length !== 1 ? "s" : ""} in {fileName || "archive"}.
             </DialogDescription>
           </DialogHeader>

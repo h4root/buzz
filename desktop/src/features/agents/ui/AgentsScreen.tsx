@@ -1,7 +1,6 @@
 import * as React from "react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
-import { usePersonasQuery } from "@/features/agents/hooks";
 import { useOpenDmMutation } from "@/features/channels/hooks";
 import {
   type ProfilePanelTab,
@@ -13,7 +12,6 @@ import {
   profilePanelViewFromSearch,
 } from "@/features/profile/ui/UserProfilePanelUtils";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import type { AgentPersona } from "@/shared/api/types";
 import {
   type ProfilePanelOpenOptions,
   ProfilePanelProvider,
@@ -27,41 +25,20 @@ const AgentsView = React.lazy(async () => {
   return { default: module.AgentsView };
 });
 
-type ProfilePanelTarget =
-  | { kind: "pubkey"; pubkey: string }
-  | { kind: "persona"; persona: AgentPersona };
-
 const AGENTS_PROFILE_SEARCH_KEYS = [
   "profile",
-  "profilePersona",
   "profileTab",
   "profileView",
 ] as const;
 
 export function AgentsScreen() {
   const identityQuery = useIdentityQuery();
-  const personasQuery = usePersonasQuery();
   const { applyPatch, values } = useHistorySearchState(
     AGENTS_PROFILE_SEARCH_KEYS,
   );
   const profilePanelTab = profilePanelTabFromSearch(values.profileTab);
   const profilePanelView = profilePanelViewFromSearch(values.profileView);
-  const profilePanelTarget = React.useMemo<ProfilePanelTarget | null>(() => {
-    if (values.profile) {
-      return { kind: "pubkey", pubkey: values.profile };
-    }
-
-    if (values.profilePersona) {
-      const persona = personasQuery.data?.find(
-        (candidate) => candidate.id === values.profilePersona,
-      );
-      if (persona) {
-        return { kind: "persona", persona };
-      }
-    }
-
-    return null;
-  }, [personasQuery.data, values.profile, values.profilePersona]);
+  const profilePubkey = values.profile || null;
   const threadPanelWidth = useThreadPanelWidth();
   const openDmMutation = useOpenDmMutation();
   const { goChannel } = useAppNavigation();
@@ -70,7 +47,6 @@ export function AgentsScreen() {
     (pubkey: string, options?: ProfilePanelOpenOptions) => {
       applyPatch({
         profile: pubkey,
-        profilePersona: null,
         profileTab: options?.tab === "info" ? null : (options?.tab ?? null),
         profileView: null,
       });
@@ -78,21 +54,9 @@ export function AgentsScreen() {
     [applyPatch],
   );
 
-  const handleOpenPersonaProfilePanel = React.useCallback(
-    (persona: AgentPersona) => {
-      applyPatch({
-        profile: null,
-        profilePersona: persona.id,
-        profileTab: null,
-        profileView: null,
-      });
-    },
-    [applyPatch],
-  );
   const handleCloseProfilePanel = React.useCallback(() => {
     applyPatch({
       profile: null,
-      profilePersona: null,
       profileTab: null,
       profileView: null,
     });
@@ -117,16 +81,13 @@ export function AgentsScreen() {
   );
 
   return (
-    <ProfilePanelProvider
-      onOpenPersonaProfilePanel={handleOpenPersonaProfilePanel}
-      onOpenProfilePanel={handleOpenProfilePanel}
-    >
+    <ProfilePanelProvider onOpenProfilePanel={handleOpenProfilePanel}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
           <React.Suspense fallback={<ViewLoadingFallback kind="agents" />}>
             <AgentsView />
           </React.Suspense>
-          {profilePanelTarget ? (
+          {profilePubkey ? (
             <UserProfilePanel
               canResetWidth={threadPanelWidth.canReset}
               currentPubkey={identityQuery.data?.pubkey}
@@ -137,16 +98,7 @@ export function AgentsScreen() {
               onResizeStart={threadPanelWidth.onResizeStart}
               onTabChange={handleProfilePanelTabChange}
               onViewChange={handleProfilePanelViewChange}
-              persona={
-                profilePanelTarget.kind === "persona"
-                  ? profilePanelTarget.persona
-                  : undefined
-              }
-              pubkey={
-                profilePanelTarget.kind === "pubkey"
-                  ? profilePanelTarget.pubkey
-                  : undefined
-              }
+              pubkey={profilePubkey}
               tab={profilePanelTab}
               view={profilePanelView}
               widthPx={threadPanelWidth.widthPx}

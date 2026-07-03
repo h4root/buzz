@@ -9,7 +9,8 @@ type RawTeam = {
   id: string;
   name: string;
   description: string | null;
-  persona_ids: string[];
+  persona_ids?: string[];
+  agent_pubkeys?: string[];
   is_builtin?: boolean;
   source_dir?: string | null;
   is_symlink?: boolean;
@@ -24,7 +25,8 @@ function fromRawTeam(team: RawTeam): AgentTeam {
     id: team.id,
     name: team.name,
     description: team.description,
-    personaIds: team.persona_ids,
+    personaIds: team.persona_ids ?? [],
+    agentPubkeys: team.agent_pubkeys ?? [],
     isBuiltin: team.is_builtin ?? false,
     sourceDir: team.source_dir ?? null,
     isSymlink: team.is_symlink ?? false,
@@ -46,6 +48,7 @@ export async function createTeam(input: CreateTeamInput): Promise<AgentTeam> {
         name: input.name,
         description: input.description,
         personaIds: input.personaIds,
+        agentPubkeys: input.agentPubkeys,
       },
     }),
   );
@@ -59,6 +62,7 @@ export async function updateTeam(input: UpdateTeamInput): Promise<AgentTeam> {
         name: input.name,
         description: input.description,
         personaIds: input.personaIds,
+        agentPubkeys: input.agentPubkeys,
       },
     }),
   );

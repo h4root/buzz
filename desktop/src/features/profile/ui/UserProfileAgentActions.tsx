@@ -38,31 +38,28 @@ export function UserProfileAgentSettingsMenu({
   isBot = false,
   managedAgent,
   onDelete,
-  onDuplicatePersona,
-  onExportPersona,
+  onDuplicateAgent,
+  onExportAgent,
   onToggleAutoStart,
-  personaActionKey,
 }: {
   archiveActions?: IdentityArchiveActions;
   isPending: boolean;
   isBot?: boolean;
   managedAgent?: ManagedAgent;
   onDelete?: () => void;
-  onDuplicatePersona?: () => void;
-  onExportPersona?: () => void;
+  onDuplicateAgent?: () => void;
+  onExportAgent?: () => void;
   onToggleAutoStart?: () => void;
-  personaActionKey?: string;
 }) {
   const [archiveConfirmOpen, setArchiveConfirmOpen] = React.useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
-  const actionKey = managedAgent?.pubkey ?? "persona-draft";
-  const personaKey = personaActionKey ?? actionKey;
+  const actionKey = managedAgent?.pubkey ?? "agent-draft";
   const canToggleAutoStart =
     managedAgent !== undefined &&
     managedAgent.backend.type === "local" &&
     onToggleAutoStart !== undefined;
   const autoStartSwitchId = `user-profile-agent-auto-start-${actionKey}`;
-  const hasPrimaryActions = Boolean(onDuplicatePersona || onExportPersona);
+  const hasPrimaryActions = Boolean(onDuplicateAgent || onExportAgent);
   const hasArchiveAction =
     archiveActions?.canArchive === true &&
     archiveActions.isArchived !== undefined;
@@ -122,21 +119,21 @@ export function UserProfileAgentSettingsMenu({
               />
             </DropdownMenuItem>
           ) : null}
-          {onDuplicatePersona ? (
+          {onDuplicateAgent ? (
             <DropdownMenuItem
-              data-testid={`user-profile-persona-duplicate-${personaKey}`}
+              data-testid={`user-profile-agent-duplicate-${actionKey}`}
               disabled={isPending}
-              onClick={onDuplicatePersona}
+              onClick={onDuplicateAgent}
             >
               <CopyPlus className="h-4 w-4" />
               Duplicate
             </DropdownMenuItem>
           ) : null}
-          {onExportPersona ? (
+          {onExportAgent ? (
             <DropdownMenuItem
-              data-testid={`user-profile-persona-export-${personaKey}`}
+              data-testid={`user-profile-agent-export-${actionKey}`}
               disabled={isPending}
-              onClick={onExportPersona}
+              onClick={onExportAgent}
             >
               <Download className="h-4 w-4" />
               Export
@@ -216,33 +213,25 @@ export function UserProfileAgentSettingsMenu({
 
 export function UserProfileAgentSettingsMenuSlot({
   archiveActions,
-  canDeletePersona,
-  canInstantiateAgent,
-  canManagePersona,
+  canManageAgent,
   isAgentActionPending,
   isBot,
   managedAgent,
   onDeleteAgent,
-  onDeletePersona,
-  onDuplicatePersona,
-  onExportPersona,
+  onDuplicateAgent,
+  onExportAgent,
   onToggleAutoStart,
-  personaActionKey,
   viewerIsOwner,
 }: {
   archiveActions: IdentityArchiveActions;
-  canDeletePersona: boolean;
-  canInstantiateAgent: boolean;
-  canManagePersona: boolean;
+  canManageAgent: boolean;
   isAgentActionPending: boolean;
   isBot: boolean;
   managedAgent?: ManagedAgent;
   onDeleteAgent: () => void;
-  onDeletePersona: () => void;
-  onDuplicatePersona: () => void;
-  onExportPersona: () => void;
+  onDuplicateAgent: () => void;
+  onExportAgent: () => void;
   onToggleAutoStart: () => void;
-  personaActionKey?: string;
   viewerIsOwner: boolean;
 }) {
   const canShowArchiveAction =
@@ -253,9 +242,8 @@ export function UserProfileAgentSettingsMenuSlot({
     archiveActions: canShowArchiveAction ? archiveActions : undefined,
     isBot,
     isPending: settingsActionPending,
-    onDuplicatePersona: canManagePersona ? onDuplicatePersona : undefined,
-    onExportPersona: canManagePersona ? onExportPersona : undefined,
-    personaActionKey,
+    onDuplicateAgent: canManageAgent ? onDuplicateAgent : undefined,
+    onExportAgent: canManageAgent ? onExportAgent : undefined,
   };
 
   if (viewerIsOwner && managedAgent) {
@@ -265,15 +253,6 @@ export function UserProfileAgentSettingsMenuSlot({
         managedAgent={managedAgent}
         onDelete={onDeleteAgent}
         onToggleAutoStart={onToggleAutoStart}
-      />
-    );
-  }
-
-  if (canInstantiateAgent) {
-    return (
-      <UserProfileAgentSettingsMenu
-        {...sharedProps}
-        onDelete={canDeletePersona ? onDeletePersona : undefined}
       />
     );
   }

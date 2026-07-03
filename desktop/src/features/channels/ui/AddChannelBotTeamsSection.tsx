@@ -1,10 +1,11 @@
 import { Check, Users } from "lucide-react";
 import type * as React from "react";
 
-import type { AgentPersona, AgentTeam } from "@/shared/api/types";
+import type { AgentPersona, AgentTeam, ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
+import { resolveTeamMembers } from "@/features/agents/lib/teamMembers";
 import {
   Tooltip,
   TooltipContent,
@@ -46,23 +47,45 @@ function SelectionChipButton({
   );
 }
 
+/**
+ * Resolve a team's members to concrete agent pubkeys: direct agent members
+ * plus the agents backing any pack persona members.
+ */
+export function resolveTeamAgentPubkeys(
+  team: AgentTeam,
+  personas: AgentPersona[],
+  agents: ManagedAgent[],
+): string[] {
+  const resolution = resolveTeamMembers(team, personas, agents);
+  const pubkeys = resolution.resolvedAgents.map((agent) => agent.pubkey);
+  for (const persona of resolution.resolvedPersonas) {
+    const backing = agents.find((agent) => agent.personaId === persona.id);
+    if (backing && !pubkeys.includes(backing.pubkey)) {
+      pubkeys.push(backing.pubkey);
+    }
+  }
+  return pubkeys;
+}
+
 type AddChannelBotTeamsSectionProps = {
+  agents: ManagedAgent[];
   canToggleSelections: boolean;
-  inChannelPersonaIds?: ReadonlySet<string>;
+  inChannelPubkeys?: ReadonlySet<string>;
   isLoading: boolean;
-  onToggleTeam: (personaIds: string[]) => void;
+  onToggleTeam: (agentPubkeys: string[]) => void;
   personas: AgentPersona[];
-  selectedPersonaIds: readonly string[];
+  selectedAgentPubkeys: readonly string[];
   teams: AgentTeam[];
 };
 
 export function AddChannelBotTeamsSection({
+  agents,
   canToggleSelections,
-  inChannelPersonaIds,
+  inChannelPubkeys,
   isLoading,
   onToggleTeam,
   personas,
-  selectedPersonaIds,
+  selectedAgentPubkeys,
   teams,
 }: AddChannelBotTeamsSectionProps) {
   if (isLoading || teams.length === 0) {
@@ -74,23 +97,33 @@ export function AddChannelBotTeamsSection({
       <div>
         <div className="text-sm font-medium">Teams</div>
         <p className="text-xs text-muted-foreground">
-          Select a team to toggle all its personas at once.
+          Select a team to toggle all its agents at once.
         </p>
       </div>
 
       <TooltipProvider delayDuration={150}>
         <div className="flex flex-wrap gap-2">
           {teams.map((team) => {
-            const resolution = resolveTeamPersonas(team, personas);
-            const validIds = resolution.resolvedPersonaIds;
+            const memberPubkeys = resolveTeamAgentPubkeys(
+              team,
+              personas,
+              agents,
+            );
+            const memberAgents = memberPubkeys
+              .map((pubkey) => agents.find((agent) => agent.pubkey === pubkey))
+              .filter((agent): agent is ManagedAgent => agent != null);
             const allSelected =
-              validIds.length > 0 &&
-              validIds.every((id) => selectedPersonaIds.includes(id));
-            const inChannelCount = inChannelPersonaIds
-              ? validIds.filter((id) => inChannelPersonaIds.has(id)).length
+              memberPubkeys.length > 0 &&
+              memberPubkeys.every((pubkey) =>
+                selectedAgentPubkeys.includes(pubkey),
+              );
+            const inChannelCount = inChannelPubkeys
+              ? memberPubkeys.filter((pubkey) =>
+                  inChannelPubkeys.has(normalizePubkey(pubkey)),
+                ).length
               : 0;
             const allInChannel =
-              inChannelCount > 0 && inChannelCount === validIds.length;
+              inChannelCount > 0 && inChannelCount === memberPubkeys.length;
 
             return (
               <Tooltip key={team.id}>
@@ -99,11 +132,11 @@ export function AddChannelBotTeamsSection({
                     <SelectionChipButton
                       disabled={
                         !canToggleSelections ||
-                        !resolution.isUsable ||
+                        memberPubkeys.length === 0 ||
                         allInChannel
                       }
                       label={team.name}
-                      onClick={() => onToggleTeam(validIds)}
+                      onClick={() => onToggleTeam(memberPubkeys)}
                       selected={allSelected}
                     >
                       <Users
@@ -119,7 +152,7 @@ export function AddChannelBotTeamsSection({
                           allSelected ? "text-primary/70" : "text-current/70",
                         )}
                       >
-                        ({validIds.length})
+                        ({memberPubkeys.length})
                       </span>
                       {inChannelCount > 0 ? (
                         <span
@@ -148,23 +181,25 @@ export function AddChannelBotTeamsSection({
                       </p>
                     ) : null}
                     <div className="flex flex-wrap gap-1">
-                      {resolution.resolvedPersonas.map((persona) => {
-                        const personaInChannel =
-                          inChannelPersonaIds?.has(persona.id) ?? false;
+                      {memberAgents.map((agent) => {
+                        const agentInChannel =
+                          inChannelPubkeys?.has(
+                            normalizePubkey(agent.pubkey),
+                          ) ?? false;
                         return (
                           <div
                             className="flex items-center gap-1 rounded-full bg-primary-foreground/10 px-1.5 py-0.5"
-                            key={persona.id}
+                            key={agent.pubkey}
                           >
                             <ProfileAvatar
-                              avatarUrl={persona.avatarUrl}
+                              avatarUrl={agent.avatarUrl}
                               className="h-4 w-4 text-3xs bg-primary-foreground/20 text-primary-foreground"
-                              label={persona.displayName}
+                              label={agent.name}
                             />
                             <span className="text-2xs text-primary-foreground">
-                              {persona.displayName}
+                              {agent.name}
                             </span>
-                            {personaInChannel ? (
+                            {agentInChannel ? (
                               <Check className="h-4 w-4 text-emerald-300" />
                             ) : null}
                           </div>

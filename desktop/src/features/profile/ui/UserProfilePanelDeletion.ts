@@ -6,7 +6,6 @@ import {
 } from "@/features/agents/lib/managedAgentControlActions";
 import { removeChannelMember } from "@/shared/api/tauri";
 import type {
-  AgentPersona,
   Channel,
   ManagedAgent,
   PresenceLookup,
@@ -23,17 +22,9 @@ type DeleteProfileManagedAgentContext = DeleteManagedAgentRulesContext & {
   removeAgentFromAllChannels: (pubkey: string) => Promise<void>;
 };
 
-type DeleteProfileManagedAgentsForPersonaContext =
-  DeleteProfileManagedAgentContext & {
-    managedAgents: readonly ManagedAgent[];
-    selectedAgent?: ManagedAgent;
-  };
-
 type UseProfileAgentDeletionInput = {
   channels?: readonly Channel[];
   deleteManagedAgent: DeleteManagedAgentRulesContext["deleteManagedAgent"];
-  managedAgent?: ManagedAgent;
-  managedAgents?: readonly ManagedAgent[];
   presenceLookup?: PresenceLookup | null;
   relayAgents?: readonly RelayAgent[];
 };
@@ -41,8 +32,6 @@ type UseProfileAgentDeletionInput = {
 export function useProfileAgentDeletion({
   channels,
   deleteManagedAgent,
-  managedAgent,
-  managedAgents,
   presenceLookup,
   relayAgents,
 }: UseProfileAgentDeletionInput) {
@@ -90,31 +79,8 @@ export function useProfileAgentDeletion({
     ],
   );
 
-  const deleteManagedAgentsForPersona = React.useCallback(
-    (persona: AgentPersona) =>
-      deleteProfileManagedAgentsForPersona(persona, {
-        channels: channels ?? [],
-        deleteManagedAgent,
-        managedAgents: managedAgents ?? [],
-        presenceLookup,
-        relayAgents: relayAgents ?? [],
-        removeAgentFromAllChannels,
-        selectedAgent: managedAgent,
-      }),
-    [
-      channels,
-      deleteManagedAgent,
-      managedAgent,
-      managedAgents,
-      presenceLookup,
-      relayAgents,
-      removeAgentFromAllChannels,
-    ],
-  );
-
   return {
     deleteManagedAgentRecord,
-    deleteManagedAgentsForPersona,
     removeAgentFromAllChannels,
   };
 }
@@ -132,29 +98,4 @@ export async function deleteProfileManagedAgent(
 
   await removeAgentFromAllChannels(agent.pubkey);
   return result;
-}
-
-export async function deleteProfileManagedAgentsForPersona(
-  persona: AgentPersona,
-  context: DeleteProfileManagedAgentsForPersonaContext,
-): Promise<ManagedAgentActionResult> {
-  const { managedAgents, selectedAgent, ...deleteContext } = context;
-  const agentsByPubkey = new Map<string, ManagedAgent>();
-
-  for (const agent of managedAgents) {
-    if (agent.personaId === persona.id) {
-      agentsByPubkey.set(agent.pubkey, agent);
-    }
-  }
-
-  if (selectedAgent?.personaId === persona.id) {
-    agentsByPubkey.set(selectedAgent.pubkey, selectedAgent);
-  }
-
-  for (const agent of agentsByPubkey.values()) {
-    const result = await deleteProfileManagedAgent(agent, deleteContext);
-    if (result.cancelled) return result;
-  }
-
-  return {};
 }

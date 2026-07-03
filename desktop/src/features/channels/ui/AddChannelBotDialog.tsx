@@ -1,23 +1,33 @@
 import { AlertTriangle, ChevronDown } from "lucide-react";
 import * as React from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
-  useCreateChannelManagedAgentsMutation,
+  useManagedAgentsQuery,
   usePersonasQuery,
   useTeamsQuery,
   type CreateChannelManagedAgentResult,
 } from "@/features/agents/hooks";
-import { useInChannelPersonaIds } from "@/features/channels/ui/useInChannelPersonaIds";
+import {
+  attachManagedAgentToChannel,
+  createChannelManagedAgents,
+  type CreateChannelManagedAgentsResult,
+} from "@/features/agents/channelAgents";
+import { useInChannelAgentPubkeys } from "@/features/channels/ui/useInChannelAgentPubkeys";
 import { AddChannelBotGenericSection } from "@/features/channels/ui/AddChannelBotGenericSection";
-import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
+import { AddChannelBotAgentsSection } from "@/features/channels/ui/AddChannelBotAgentsSection";
 import { AddChannelBotReuseGuard } from "@/features/channels/ui/AddChannelBotReuseGuard";
 import { useReusableAgentDetection } from "@/features/channels/ui/useReusableAgentDetection";
-import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
-import { probeBackendProvider } from "@/shared/api/tauri";
+import {
+  AddChannelBotTeamsSection,
+  resolveTeamAgentPubkeys,
+} from "@/features/channels/ui/AddChannelBotTeamsSection";
+import { probeBackendProvider, updateManagedAgent } from "@/shared/api/tauri";
 import type {
   AcpRuntime,
   BackendProviderCandidate,
   BackendProviderProbeResult,
+  ManagedAgent,
   ManagedAgentBackend,
   RespondToMode,
 } from "@/shared/api/types";
@@ -29,17 +39,12 @@ import {
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import {
   coerceConfigValues,
   ProviderConfigFields,
 } from "@/features/agents/ui/ProviderConfigFields";
-import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
-import { useEffectiveRuntimes } from "@/features/channels/ui/useEffectiveRuntimes";
-import { getActivePersonas } from "@/features/agents/lib/catalog";
-import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
 import { useLastRuntime } from "@/features/agents/lib/useLastRuntime";
 import { CreateAgentRespondToField } from "@/features/agents/ui/RespondToField";
 
@@ -54,8 +59,6 @@ type AddChannelBotDialogProps = {
   onAdded?: (result: CreateChannelManagedAgentResult) => void;
   onOpenChange: (open: boolean) => void;
 };
-
-const RUNTIME_NONE_SENTINEL = "__none__";
 
 function defaultBotName(runtime: AcpRuntime | null) {
   if (!runtime) {
@@ -107,23 +110,24 @@ export function AddChannelBotDialog({
   const { setLastRuntime } = useLastRuntime();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
-  const inChannelPersonaIds = useInChannelPersonaIds(
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const inChannelPubkeys = useInChannelAgentPubkeys(
     channelId,
     open && channelId !== null,
   );
-  const createBotsMutation = useCreateChannelManagedAgentsMutation(channelId);
-  const personas = React.useMemo(
-    () => getActivePersonas(personasQuery.data ?? []),
-    [personasQuery.data],
-  );
+  const agents = managedAgentsQuery.data ?? [];
+  const personas = personasQuery.data ?? [];
   const teams = React.useMemo(
-    () => getUsableTeams(teamsQuery.data ?? [], personas),
-    [personas, teamsQuery.data],
+    () =>
+      (teamsQuery.data ?? []).filter(
+        (team) => resolveTeamAgentPubkeys(team, personas, agents).length > 0,
+      ),
+    [agents, personas, teamsQuery.data],
   );
   const [selectedRuntimeId, setSelectedRuntimeId] = React.useState("");
-  const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
-    [],
-  );
+  const [selectedAgentPubkeys, setSelectedAgentPubkeys] = React.useState<
+    string[]
+  >([]);
   const [includeGeneric, setIncludeGeneric] = React.useState(false);
   const [customName, setCustomName] = React.useState("");
   const [customPrompt, setCustomPrompt] = React.useState("");
@@ -151,36 +155,28 @@ export function AddChannelBotDialog({
     React.useState<BackendProviderProbeResult | null>(null);
   const [probeError, setProbeError] = React.useState<string | null>(null);
 
-  const selectedRuntime = React.useMemo(
+  const genericRuntime = React.useMemo(
     () =>
-      selectedRuntimeId
-        ? (providers.find((runtime) => runtime.id === selectedRuntimeId) ??
-          null)
-        : null,
+      (selectedRuntimeId
+        ? providers.find((runtime) => runtime.id === selectedRuntimeId)
+        : null) ??
+      providers[0] ??
+      null,
     [providers, selectedRuntimeId],
   );
-  const isOverrideActive = selectedRuntime !== null;
-  const selectedPersonas = React.useMemo(
-    () => personas.filter((persona) => selectedPersonaIds.includes(persona.id)),
-    [personas, selectedPersonaIds],
+  const selectedAgents = React.useMemo(
+    () => agents.filter((agent) => selectedAgentPubkeys.includes(agent.pubkey)),
+    [agents, selectedAgentPubkeys],
   );
-  const selectedCount = selectedPersonas.length + (includeGeneric ? 1 : 0);
+  const selectedCount = selectedAgents.length + (includeGeneric ? 1 : 0);
 
   const reusableAgent = useReusableAgentDetection(
     channelId,
     open && channelId !== null,
-    selectedRuntime ?? providers[0] ?? null,
-    selectedPersonas,
+    genericRuntime,
+    [],
     includeGeneric,
     customPrompt,
-  );
-
-  const { runtimeWarnings, effectiveRuntimes } = useEffectiveRuntimes(
-    personas,
-    selectedPersonas,
-    providers,
-    selectedRuntime,
-    isOverrideActive,
   );
 
   const isProviderMode = runOn !== "local";
@@ -197,19 +193,23 @@ export function AddChannelBotDialog({
     );
   }, [isProviderMode, probedProvider, providerConfig]);
 
+  const createBotsMutation = useAddChannelBotsMutation(channelId);
+
   React.useEffect(() => {
-    if (!selectedRuntime || hasEditedCustomName) {
+    if (!genericRuntime || hasEditedCustomName) {
       return;
     }
 
-    setCustomName(defaultBotName(selectedRuntime));
-  }, [hasEditedCustomName, selectedRuntime]);
+    setCustomName(defaultBotName(genericRuntime));
+  }, [hasEditedCustomName, genericRuntime]);
 
   React.useEffect(() => {
-    setSelectedPersonaIds((current) =>
-      current.filter((id) => personas.some((persona) => persona.id === id)),
+    setSelectedAgentPubkeys((current) =>
+      current.filter((pubkey) =>
+        agents.some((agent) => agent.pubkey === pubkey),
+      ),
     );
-  }, [personas]);
+  }, [agents]);
 
   React.useEffect(() => {
     if (!isProviderMode || !selectedBackendProvider) {
@@ -257,7 +257,7 @@ export function AddChannelBotDialog({
 
   function reset() {
     setSelectedRuntimeId("");
-    setSelectedPersonaIds([]);
+    setSelectedAgentPubkeys([]);
     setIncludeGeneric(false);
     setCustomName(providers[0] ? defaultBotName(providers[0]) : "");
     setCustomPrompt("");
@@ -282,13 +282,15 @@ export function AddChannelBotDialog({
     onOpenChange(next);
   }
 
-  function handleToggleTeam(personaIds: string[]) {
-    setSelectedPersonaIds((current) => {
-      const allSelected = personaIds.every((id) => current.includes(id));
+  function handleToggleTeam(agentPubkeys: string[]) {
+    setSelectedAgentPubkeys((current) => {
+      const allSelected = agentPubkeys.every((pubkey) =>
+        current.includes(pubkey),
+      );
       if (allSelected) {
-        return current.filter((id) => !personaIds.includes(id));
+        return current.filter((pubkey) => !agentPubkeys.includes(pubkey));
       }
-      const merged = new Set([...current, ...personaIds]);
+      const merged = new Set([...current, ...agentPubkeys]);
       return [...merged];
     });
     setSubmissionNotice(null);
@@ -305,7 +307,10 @@ export function AddChannelBotDialog({
   }
 
   async function handleSubmit() {
-    if (providers.length === 0 || selectedCount === 0) {
+    if (selectedCount === 0) {
+      return;
+    }
+    if (includeGeneric && !genericRuntime) {
       return;
     }
 
@@ -329,52 +334,26 @@ export function AddChannelBotDialog({
           }
         : {};
 
-    const inputs = [
-      ...(includeGeneric
-        ? [
-            {
-              runtime: selectedRuntime ?? providers[0],
-              name: customName,
-              systemPrompt: customPrompt,
-              role: "bot" as const,
-              backend,
-              forceNewInstance,
-              ...respondToFields,
-            },
-          ]
-        : []),
-      ...selectedPersonas.map((persona) => {
-        const effectiveFallback = selectedRuntime ?? providers[0] ?? null;
-        const resolved = resolvePersonaRuntime(
-          persona.runtime,
-          providers,
-          effectiveFallback,
-          isOverrideActive,
-        );
-        return {
-          runtime: resolved.runtime ?? effectiveFallback ?? providers[0],
-          name: persona.displayName,
-          personaId: persona.id,
-          // A deliberate runtime-selector pick overrides the persona; a Case-3
-          // fallback (persona runtime not installed) is NOT a pin. `isOverridden`
-          // alone can't tell them apart, so thread the explicit user intent.
-          harnessOverride: isOverrideActive,
-          systemPrompt: persona.systemPrompt,
-          avatarUrl: persona.avatarUrl ?? undefined,
-          model: persona.model ?? undefined,
-          role: "bot" as const,
-          backend,
-          forceNewInstance,
-          ...respondToFields,
-        };
-      }),
-    ];
-
     setSubmissionNotice(null);
     setSubmissionError(null);
 
     try {
-      const result = await createBotsMutation.mutateAsync(inputs);
+      const result = await createBotsMutation.mutateAsync({
+        agents: selectedAgents,
+        generic:
+          includeGeneric && genericRuntime
+            ? {
+                runtime: genericRuntime,
+                name: customName,
+                systemPrompt: customPrompt,
+                backend,
+                forceNewInstance,
+                ...respondToFields,
+              }
+            : null,
+        respondTo,
+        respondToAllowlist,
+      });
 
       if (result.failures.length === 0) {
         if (result.successes[0]) {
@@ -384,13 +363,14 @@ export function AddChannelBotDialog({
         return;
       }
 
-      const failedPersonaIds = new Set(
-        result.failures
-          .map((failure) => failure.personaId)
-          .filter((personaId): personaId is string => Boolean(personaId)),
+      const failedNames = new Set(
+        result.failures.map((failure) => failure.name),
       );
-      setSelectedPersonaIds((current) =>
-        current.filter((personaId) => failedPersonaIds.has(personaId)),
+      setSelectedAgentPubkeys((current) =>
+        current.filter((pubkey) => {
+          const agent = agents.find((candidate) => candidate.pubkey === pubkey);
+          return agent ? failedNames.has(agent.name) : false;
+        }),
       );
       setIncludeGeneric(
         result.failures.some((failure) => failure.kind === "generic"),
@@ -417,14 +397,14 @@ export function AddChannelBotDialog({
     respondTo !== "allowlist" || respondToAllowlist.length > 0;
 
   const canSubmit =
-    (selectedRuntime !== null || providers.length > 0) &&
     selectedCount > 0 &&
-    (!includeGeneric || customName.trim().length > 0) &&
+    (!includeGeneric ||
+      (genericRuntime !== null && customName.trim().length > 0)) &&
     respondToValid &&
-    !(isProviderMode && !probedProvider) &&
+    !(includeGeneric && isProviderMode && !probedProvider) &&
     providerConfigComplete &&
-    !providersLoading &&
-    !(isProviderMode && resolvedBackendProvidersLoading) &&
+    !(includeGeneric && providersLoading) &&
+    !(includeGeneric && isProviderMode && resolvedBackendProvidersLoading) &&
     !createBotsMutation.isPending;
   const canChooseProvider =
     providers.length > 0 && !providersLoading && !createBotsMutation.isPending;
@@ -433,7 +413,7 @@ export function AddChannelBotDialog({
     ? "Loading runtimes..."
     : providers.length === 0
       ? "No runtimes found"
-      : (selectedRuntime?.label ?? "Use persona defaults");
+      : (genericRuntime?.label ?? "Choose runtime");
   const addButtonLabel = createBotsMutation.isPending
     ? selectedCount > 1
       ? `Adding ${selectedCount}...`
@@ -447,7 +427,11 @@ export function AddChannelBotDialog({
       <ChooserDialogContent
         className="max-w-3xl"
         data-testid="add-channel-bot-dialog"
-        description="Select any combination of saved personas, or turn on Generic for a one-off custom agent."
+        description="Select any combination of your agents, or turn on New agent for a one-off custom agent."
+        // Without this, open-autofocus lands on the first agent chip, whose
+        // focus-triggered tooltip becomes the topmost dismissable layer — the
+        // first Escape then closes the tooltip instead of the dialog.
+        onOpenAutoFocus={(event) => event.preventDefault()}
         footer={
           <>
             <Button
@@ -475,157 +459,152 @@ export function AddChannelBotDialog({
         scrollAreaTestId="add-channel-bot-dialog-scroll-area"
         title="Add agents"
       >
-        {resolvedBackendProviders.length > 0 ? (
-          <div className="space-y-1.5">
-            <div className="text-sm font-medium">Run on</div>
-            <select
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
-              disabled={createBotsMutation.isPending}
-              onChange={(e) => handleRunOnChange(e.target.value)}
-              value={runOn}
-            >
-              <option value="local">This computer</option>
-              {resolvedBackendProviders.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.id}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
-
-        {isProviderMode && selectedBackendProvider ? (
-          <div className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-            <p className="text-sm text-warning">
-              This provider at{" "}
-              <span className="font-mono font-medium">
-                {selectedBackendProvider.binaryPath}
-              </span>{" "}
-              will receive your agent&apos;s private key. Only use providers
-              from trusted sources.
-            </p>
-          </div>
-        ) : null}
-
-        {probeError ? (
-          <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            Could not probe provider: {probeError}
-          </p>
-        ) : null}
-
-        {isProviderMode && probedProvider?.config_schema ? (
-          <ProviderConfigFields
-            config={providerConfig}
-            onChange={setProviderConfig}
-            schema={probedProvider.config_schema}
-          />
-        ) : null}
-
-        <div className="space-y-1.5">
-          <div className="text-sm font-medium">Runtime</div>
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                className="h-9 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-3 text-sm font-medium text-foreground shadow-none hover:bg-muted/70"
-                disabled={!canChooseProvider}
-                size="default"
-                type="button"
-                variant="ghost"
-              >
-                <span className="truncate">{runtimeTriggerLabel}</span>
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              className="min-w-40"
-              onCloseAutoFocus={(event) => event.preventDefault()}
-            >
-              <DropdownMenuRadioGroup
-                onValueChange={(id) => {
-                  if (id === RUNTIME_NONE_SENTINEL) {
-                    setSelectedRuntimeId("");
-                  } else {
-                    setSelectedRuntimeId(id);
-                    setLastRuntime(id);
-                  }
-                }}
-                value={selectedRuntime?.id ?? RUNTIME_NONE_SENTINEL}
-              >
-                <DropdownMenuRadioItem value={RUNTIME_NONE_SENTINEL}>
-                  Use persona defaults
-                </DropdownMenuRadioItem>
-                <DropdownMenuSeparator />
-                {providers.map((provider) => (
-                  <DropdownMenuRadioItem key={provider.id} value={provider.id}>
-                    {provider.label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <p className="text-xs text-muted-foreground">
-            {isOverrideActive
-              ? "All agents will use this runtime, overriding persona preferences."
-              : "Each persona uses its preferred runtime. Choose a runtime above to override all."}
-          </p>
-        </div>
-
         {teams.length > 0 ? (
           <AddChannelBotTeamsSection
+            agents={agents}
             canToggleSelections={canToggleSelections}
-            inChannelPersonaIds={inChannelPersonaIds}
+            inChannelPubkeys={inChannelPubkeys}
             isLoading={teamsQuery.isLoading}
             onToggleTeam={handleToggleTeam}
             personas={personas}
-            selectedPersonaIds={selectedPersonaIds}
+            selectedAgentPubkeys={selectedAgentPubkeys}
             teams={teams}
           />
         ) : null}
 
-        <AddChannelBotPersonasSection
+        <AddChannelBotAgentsSection
+          agents={agents}
           canToggleSelections={canToggleSelections}
-          effectiveRuntimes={effectiveRuntimes}
-          inChannelPersonaIds={inChannelPersonaIds}
+          inChannelPubkeys={inChannelPubkeys}
           includeGeneric={includeGeneric}
-          isLoading={personasQuery.isLoading}
+          isLoading={managedAgentsQuery.isLoading}
           onToggleGeneric={() => {
             setIncludeGeneric((current) => !current);
             setSubmissionNotice(null);
             setSubmissionError(null);
           }}
-          onTogglePersona={(personaId) => {
-            setSelectedPersonaIds((current) => toggleValue(current, personaId));
+          onToggleAgent={(pubkey) => {
+            setSelectedAgentPubkeys((current) => toggleValue(current, pubkey));
             setSubmissionNotice(null);
             setSubmissionError(null);
           }}
-          personas={personas}
-          selectedPersonaIds={selectedPersonaIds}
+          selectedAgentPubkeys={selectedAgentPubkeys}
         />
 
         {includeGeneric ? (
-          <AddChannelBotGenericSection
-            disabled={createBotsMutation.isPending}
-            name={customName}
-            onNameChange={(value) => {
-              setHasEditedCustomName(true);
-              setCustomName(value);
-            }}
-            onPromptChange={setCustomPrompt}
-            prompt={customPrompt}
-          />
-        ) : null}
+          <>
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium">Runtime</div>
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    className="h-9 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-3 text-sm font-medium text-foreground shadow-none hover:bg-muted/70"
+                    disabled={!canChooseProvider}
+                    size="default"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <span className="truncate">{runtimeTriggerLabel}</span>
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  className="min-w-40"
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
+                  <DropdownMenuRadioGroup
+                    onValueChange={(id) => {
+                      setSelectedRuntimeId(id);
+                      setLastRuntime(id);
+                    }}
+                    value={genericRuntime?.id ?? ""}
+                  >
+                    {providers.map((provider) => (
+                      <DropdownMenuRadioItem
+                        key={provider.id}
+                        value={provider.id}
+                      >
+                        {provider.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <p className="text-xs text-muted-foreground">
+                The new agent runs on this runtime.
+              </p>
+            </div>
 
-        {reusableAgent ? (
-          <div className="pt-2">
-            <AddChannelBotReuseGuard
+            {resolvedBackendProviders.length > 0 ? (
+              <div className="space-y-1.5">
+                <div className="text-sm font-medium">Run on</div>
+                <select
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
+                  disabled={createBotsMutation.isPending}
+                  onChange={(e) => handleRunOnChange(e.target.value)}
+                  value={runOn}
+                >
+                  <option value="local">This computer</option>
+                  {resolvedBackendProviders.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {isProviderMode && selectedBackendProvider ? (
+              <div className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <p className="text-sm text-warning">
+                  This provider at{" "}
+                  <span className="font-mono font-medium">
+                    {selectedBackendProvider.binaryPath}
+                  </span>{" "}
+                  will receive your agent&apos;s private key. Only use providers
+                  from trusted sources.
+                </p>
+              </div>
+            ) : null}
+
+            {probeError ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                Could not probe provider: {probeError}
+              </p>
+            ) : null}
+
+            {isProviderMode && probedProvider?.config_schema ? (
+              <ProviderConfigFields
+                config={providerConfig}
+                onChange={setProviderConfig}
+                schema={probedProvider.config_schema}
+              />
+            ) : null}
+
+            <AddChannelBotGenericSection
               disabled={createBotsMutation.isPending}
-              forceNew={forceNewInstance}
-              onForceNewChange={setForceNewInstance}
-              reusableAgent={reusableAgent}
+              name={customName}
+              onNameChange={(value) => {
+                setHasEditedCustomName(true);
+                setCustomName(value);
+              }}
+              onPromptChange={setCustomPrompt}
+              prompt={customPrompt}
             />
-          </div>
+
+            {reusableAgent ? (
+              <div className="pt-2">
+                <AddChannelBotReuseGuard
+                  disabled={createBotsMutation.isPending}
+                  forceNew={forceNewInstance}
+                  onForceNewChange={setForceNewInstance}
+                  reusableAgent={reusableAgent}
+                />
+              </div>
+            ) : null}
+          </>
         ) : null}
 
         {selectedCount > 0 ? (
@@ -640,7 +619,7 @@ export function AddChannelBotDialog({
 
         {selectedCount === 0 ? (
           <div className="rounded-2xl border border-dashed border-border/70 bg-muted/15 px-4 py-4 text-sm text-muted-foreground">
-            Pick one or more personas, or enable Generic to add a custom agent.
+            Pick one or more agents, or enable New agent to add a custom agent.
           </div>
         ) : null}
 
@@ -650,21 +629,9 @@ export function AddChannelBotDialog({
           </p>
         ) : null}
 
-        {runtimeWarnings.length > 0
-          ? runtimeWarnings.map((warning) => (
-              <div
-                className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3"
-                key={warning}
-              >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                <p className="text-sm text-warning">{warning}</p>
-              </div>
-            ))
-          : null}
-
-        {personasQuery.error instanceof Error ? (
+        {managedAgentsQuery.error instanceof Error ? (
           <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {personasQuery.error.message}
+            {managedAgentsQuery.error.message}
           </p>
         ) : null}
 
@@ -688,4 +655,97 @@ export function AddChannelBotDialog({
       </ChooserDialogContent>
     </Dialog>
   );
+}
+
+type AddChannelBotsInput = {
+  agents: ManagedAgent[];
+  generic: {
+    runtime: AcpRuntime;
+    name: string;
+    systemPrompt: string;
+    backend: ManagedAgentBackend;
+    forceNewInstance: boolean;
+    respondTo?: RespondToMode;
+    respondToAllowlist?: string[];
+  } | null;
+  respondTo: RespondToMode;
+  respondToAllowlist: string[];
+};
+
+function useAddChannelBotsMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (
+      input: AddChannelBotsInput,
+    ): Promise<CreateChannelManagedAgentsResult> => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      const result: CreateChannelManagedAgentsResult = input.generic
+        ? await createChannelManagedAgents(channelId, [
+            {
+              runtime: input.generic.runtime,
+              name: input.generic.name,
+              systemPrompt: input.generic.systemPrompt,
+              role: "bot" as const,
+              backend: input.generic.backend,
+              forceNewInstance: input.generic.forceNewInstance,
+              respondTo: input.generic.respondTo,
+              respondToAllowlist: input.generic.respondToAllowlist,
+            },
+          ])
+        : { successes: [], failures: [] };
+
+      // Existing agents attach directly; permission changes apply first so
+      // the user's respond-to choice is honored on the attached agent.
+      for (const agent of input.agents) {
+        try {
+          let target = agent;
+          if (input.respondTo !== "owner-only") {
+            target = (
+              await updateManagedAgent({
+                pubkey: agent.pubkey,
+                respondTo: input.respondTo,
+                respondToAllowlist:
+                  input.respondTo === "allowlist"
+                    ? input.respondToAllowlist
+                    : undefined,
+              })
+            ).agent;
+          }
+          const attached = await attachManagedAgentToChannel(channelId, {
+            agent: target,
+            role: "bot",
+          });
+          result.successes.push({
+            ...attached,
+            created: false,
+            runtimeId: "",
+          });
+        } catch (error) {
+          result.failures.push({
+            kind: "generic",
+            name: agent.name,
+            personaId: null,
+            error:
+              error instanceof Error ? error.message : "Failed to add agent.",
+          });
+        }
+      }
+
+      return result;
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["managed-agents"] });
+      void queryClient.invalidateQueries({ queryKey: ["relay-agents"] });
+      void queryClient.invalidateQueries({ queryKey: ["channels"] });
+      if (channelId) {
+        void queryClient.invalidateQueries({
+          queryKey: ["channels", channelId, "members"],
+        });
+      }
+    },
+  });
 }

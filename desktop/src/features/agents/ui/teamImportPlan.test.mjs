@@ -24,14 +24,29 @@ function createPersona(
   };
 }
 
-function createTeam(personaIds) {
+function createTeam(personaIds, agentPubkeys = []) {
   return {
     id: "team-1",
     name: "Alpha Team",
     description: "Original description",
     personaIds,
+    agentPubkeys,
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
+  };
+}
+
+function createAgent(pubkey, name, systemPrompt = "Prompt") {
+  return {
+    pubkey,
+    name,
+    personaId: null,
+    avatarUrl: null,
+    systemPrompt,
+    model: null,
+    provider: null,
+    envVars: {},
+    status: "stopped",
   };
 }
 
@@ -58,7 +73,7 @@ test("buildTeamImportPlan categorizes updated, added, and missing members", () =
     ],
   };
 
-  const plan = buildTeamImportPlan({ team, personas, preview });
+  const plan = buildTeamImportPlan({ team, personas, agents: [], preview });
 
   assert.equal(plan.membersToUpdate.length, 1);
   assert.equal(plan.membersToUpdate[0]?.existing.id, "persona-1");
@@ -97,7 +112,7 @@ test("buildTeamImportPlan pairs duplicate names in stable order", () => {
     ],
   };
 
-  const plan = buildTeamImportPlan({ team, personas, preview });
+  const plan = buildTeamImportPlan({ team, personas, agents: [], preview });
 
   assert.equal(plan.matchedMembers.length, 2);
   assert.equal(plan.matchedMembers[0]?.existing.id, "persona-1");
@@ -125,7 +140,34 @@ test("buildTeamImportPlan reports unresolved persona ids from stale team members
     ],
   };
 
-  const plan = buildTeamImportPlan({ team, personas, preview });
+  const plan = buildTeamImportPlan({ team, personas, agents: [], preview });
 
-  assert.deepEqual(plan.unresolvedPersonaIds, ["persona-missing"]);
+  assert.deepEqual(plan.unresolvedMemberIds, ["persona-missing"]);
+});
+
+test("buildTeamImportPlan matches agent members by name", () => {
+  const team = createTeam([], ["agent-pk-1", "agent-pk-2"]);
+  const agents = [
+    createAgent("agent-pk-1", "Honey", "Old prompt"),
+    createAgent("agent-pk-2", "Waxwing", "Waxwing prompt"),
+  ];
+  const preview = {
+    name: "Alpha Team",
+    description: "Original description",
+    personas: [
+      {
+        display_name: "Honey",
+        system_prompt: "New prompt",
+        avatar_url: null,
+      },
+    ],
+  };
+
+  const plan = buildTeamImportPlan({ team, personas: [], agents, preview });
+
+  assert.equal(plan.membersToUpdate.length, 1);
+  assert.equal(plan.membersToUpdate[0]?.existing.kind, "agent");
+  assert.equal(plan.membersToUpdate[0]?.existing.id, "agent-pk-1");
+  assert.equal(plan.missingMembers.length, 1);
+  assert.equal(plan.missingMembers[0]?.existing.id, "agent-pk-2");
 });

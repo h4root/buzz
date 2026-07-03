@@ -2,9 +2,17 @@ import * as React from "react";
 import { RefreshCw, Upload } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import {
+  memberFromAgent,
+  memberFromPersona,
+  splitMemberKeys,
+  teamMemberKeys,
+  type TeamCardMember,
+} from "@/features/agents/lib/teamMembers";
 import type {
   AgentPersona,
   CreateTeamInput,
+  ManagedAgent,
   UpdateTeamInput,
 } from "@/shared/api/types";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
@@ -21,7 +29,6 @@ import {
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
-import { personaCatalogCopy } from "./personaLibraryCopy";
 import { RemoveMembersConfirmDialog } from "./RemoveMembersConfirmDialog";
 import {
   getImportButtonLabel,
@@ -29,12 +36,12 @@ import {
   getImportErrorLabel,
   IMPORT_ERROR_VISIBILITY_MS,
 } from "./teamDialogImportState";
-import {
-  copySelectedPersonaIds,
-  countMissingPersonaIds,
-  filterAvailablePersonaIds,
-  orderPersonasByInitiallySelected,
-} from "./teamDialogSelection";
+
+export type RemovedTeamMemberRef = {
+  kind: "agent" | "persona";
+  id: string;
+  displayName: string;
+};
 
 type TeamDialogProps = {
   open: boolean;
@@ -42,13 +49,14 @@ type TeamDialogProps = {
   description: string;
   submitLabel: string;
   initialValues: CreateTeamInput | UpdateTeamInput | null;
+  agents: ManagedAgent[];
   personas: AgentPersona[];
   error: Error | null;
   isPending: boolean;
   isImportPending?: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: CreateTeamInput | UpdateTeamInput) => Promise<void>;
-  onDeleteRemovedPersonas?: (personaIds: string[]) => Promise<void>;
+  onDeleteRemovedMembers?: (members: RemovedTeamMemberRef[]) => Promise<void>;
   onImportUpdateFile?: (
     teamId: string,
     fileBytes: number[],
@@ -62,24 +70,23 @@ export function TeamDialog({
   description,
   submitLabel,
   initialValues,
+  agents,
   personas,
   error,
   isPending,
   isImportPending = false,
   onOpenChange,
   onSubmit,
-  onDeleteRemovedPersonas,
+  onDeleteRemovedMembers,
   onImportUpdateFile,
 }: TeamDialogProps) {
   const [name, setName] = React.useState("");
   const [teamDescription, setTeamDescription] = React.useState("");
-  const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
+  const [selectedMemberKeys, setSelectedMemberKeys] = React.useState<string[]>(
     [],
   );
-  const [
-    initialSelectedPersonaIdsForSort,
-    setInitialSelectedPersonaIdsForSort,
-  ] = React.useState<string[]>([]);
+  const [initialSelectedKeysForSort, setInitialSelectedKeysForSort] =
+    React.useState<string[]>([]);
   const [isImportingUpdate, setIsImportingUpdate] = React.useState(false);
   const [importErrorMessage, setImportErrorMessage] = React.useState<
     string | null
@@ -92,25 +99,41 @@ export function TeamDialog({
       : null;
   const canImportTeamUpdate = isEditMode && Boolean(onImportUpdateFile);
   const [isWindowFileDragOver, setIsWindowFileDragOver] = React.useState(false);
-  const missingInitialPersonaCount = React.useMemo(() => {
+
+  // Pickable members: every managed agent, plus the persona-backed members
+  // this team already carries (pack teams) so they stay visible/toggleable.
+  const memberOptions = React.useMemo<TeamCardMember[]>(() => {
+    const initialPersonaIds = new Set(initialValues?.personaIds ?? []);
+    const personaOptions = personas
+      .filter((persona) => initialPersonaIds.has(persona.id))
+      .map(memberFromPersona);
+    const agentOptions = agents.map(memberFromAgent);
+    return [...personaOptions, ...agentOptions];
+  }, [agents, initialValues, personas]);
+  const memberOptionsByKey = React.useMemo(
+    () => new Map(memberOptions.map((option) => [option.key, option])),
+    [memberOptions],
+  );
+
+  const missingInitialMemberCount = React.useMemo(() => {
     if (!initialValues) {
       return 0;
     }
-
-    return countMissingPersonaIds(initialValues.personaIds, personas);
-  }, [initialValues, personas]);
+    return teamMemberKeys(initialValues).filter(
+      (key) => !memberOptionsByKey.has(key),
+    ).length;
+  }, [initialValues, memberOptionsByKey]);
 
   React.useEffect(() => {
     if (!open || !initialValues) {
       return;
     }
 
+    const keys = teamMemberKeys(initialValues);
     setName(initialValues.name);
     setTeamDescription(initialValues.description ?? "");
-    setSelectedPersonaIds(copySelectedPersonaIds(initialValues.personaIds));
-    setInitialSelectedPersonaIdsForSort(
-      copySelectedPersonaIds(initialValues.personaIds),
-    );
+    setSelectedMemberKeys(keys);
+    setInitialSelectedKeysForSort(keys);
     setImportErrorMessage(null);
     setIsImportingUpdate(false);
   }, [initialValues, open]);
@@ -227,8 +250,8 @@ export function TeamDialog({
     if (!next) {
       setName("");
       setTeamDescription("");
-      setSelectedPersonaIds([]);
-      setInitialSelectedPersonaIdsForSort([]);
+      setSelectedMemberKeys([]);
+      setInitialSelectedKeysForSort([]);
       setImportErrorMessage(null);
       setIsImportingUpdate(false);
       setIsWindowFileDragOver(false);
@@ -238,35 +261,38 @@ export function TeamDialog({
     onOpenChange(next);
   }
 
-  function togglePersona(personaId: string) {
-    setSelectedPersonaIds((current) =>
-      current.includes(personaId)
-        ? current.filter((id) => id !== personaId)
-        : [...current, personaId],
+  function toggleMember(key: string) {
+    setSelectedMemberKeys((current) =>
+      current.includes(key)
+        ? current.filter((candidate) => candidate !== key)
+        : [...current, key],
     );
   }
 
-  const removedPersonaIds = React.useMemo(() => {
+  const removedMembers = React.useMemo<RemovedTeamMemberRef[]>(() => {
     if (!isEditMode || !initialValues || !("id" in initialValues)) return [];
-    const currentSet = new Set(selectedPersonaIds);
-    return initialValues.personaIds.filter(
-      (id) => !currentSet.has(id) && personas.some((p) => p.id === id),
-    );
-  }, [isEditMode, initialValues, selectedPersonaIds, personas]);
-
-  const removedPersonaNames = React.useMemo(
-    () =>
-      removedPersonaIds
-        .map((id) => personas.find((p) => p.id === id)?.displayName)
-        .filter(Boolean),
-    [removedPersonaIds, personas],
-  );
+    const currentSet = new Set(selectedMemberKeys);
+    return teamMemberKeys(initialValues)
+      .filter((key) => !currentSet.has(key))
+      .map((key) => memberOptionsByKey.get(key))
+      .filter((option): option is TeamCardMember => option != null)
+      .map((option) => ({
+        kind: option.kind,
+        id: option.id,
+        displayName: option.displayName,
+      }));
+  }, [isEditMode, initialValues, memberOptionsByKey, selectedMemberKeys]);
 
   function buildSubmitInput(): CreateTeamInput | UpdateTeamInput {
+    const availableKeys = selectedMemberKeys.filter((key) =>
+      memberOptionsByKey.has(key),
+    );
+    const { personaIds, agentPubkeys } = splitMemberKeys(availableKeys);
     const baseInput = {
       name,
       description: teamDescription.trim() || undefined,
-      personaIds: filterAvailablePersonaIds(selectedPersonaIds, personas),
+      personaIds,
+      agentPubkeys,
     };
 
     if (initialValues && "id" in initialValues) {
@@ -278,7 +304,7 @@ export function TeamDialog({
   async function handleSubmit() {
     if (!initialValues) return;
 
-    if (removedPersonaIds.length > 0 && isEditMode && onDeleteRemovedPersonas) {
+    if (removedMembers.length > 0 && isEditMode && onDeleteRemovedMembers) {
       setConfirmRemovalOpen(true);
       return;
     }
@@ -294,8 +320,8 @@ export function TeamDialog({
   async function handleSubmitDeleteAgents() {
     setConfirmRemovalOpen(false);
     await onSubmit(buildSubmitInput());
-    if (onDeleteRemovedPersonas && removedPersonaIds.length > 0) {
-      await onDeleteRemovedPersonas(removedPersonaIds);
+    if (onDeleteRemovedMembers && removedMembers.length > 0) {
+      await onDeleteRemovedMembers(removedMembers);
     }
   }
 
@@ -309,14 +335,19 @@ export function TeamDialog({
     isImportDragOver,
     importErrorMessage,
   });
-  const orderedPersonas = React.useMemo(
-    () =>
-      orderPersonasByInitiallySelected(
-        personas,
-        initialSelectedPersonaIdsForSort,
-      ),
-    [initialSelectedPersonaIdsForSort, personas],
-  );
+  const orderedMembers = React.useMemo(() => {
+    const selectedKeys = new Set(initialSelectedKeysForSort);
+    const selected: TeamCardMember[] = [];
+    const unselected: TeamCardMember[] = [];
+    for (const option of memberOptions) {
+      if (selectedKeys.has(option.key)) {
+        selected.push(option);
+      } else {
+        unselected.push(option);
+      }
+    }
+    return [...selected, ...unselected];
+  }, [initialSelectedKeysForSort, memberOptions]);
 
   return (
     <>
@@ -363,42 +394,42 @@ export function TeamDialog({
               </div>
 
               <div className="space-y-2">
-                <span className="text-sm font-medium">Personas</span>
+                <span className="text-sm font-medium">Agents</span>
                 <p className="text-xs text-muted-foreground">
-                  Select the personas to include in this team.
+                  Select the agents to include in this team.
                 </p>
-                {missingInitialPersonaCount > 0 ? (
+                {missingInitialMemberCount > 0 ? (
                   <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                    This team references {missingInitialPersonaCount} persona
-                    {missingInitialPersonaCount === 1 ? "" : "s"} that{" "}
-                    {missingInitialPersonaCount === 1 ? "is" : "are"} no longer
-                    in My Agents. Save to remove them, or add them back to My
-                    Agents first.
+                    This team references {missingInitialMemberCount} agent
+                    {missingInitialMemberCount === 1 ? "" : "s"} that{" "}
+                    {missingInitialMemberCount === 1 ? "is" : "are"} no longer
+                    available on this device. Save to remove them.
                   </p>
                 ) : null}
-                {personas.length === 0 ? (
+                {memberOptions.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">
-                    {personaCatalogCopy.teamEmptyState}
+                    No agents yet. Create an agent first, then group agents into
+                    a team.
                   </p>
                 ) : (
                   <div
                     className="max-h-60 space-y-1 overflow-y-auto rounded-lg border border-border/70 p-2"
                     role="listbox"
-                    aria-label="Personas"
+                    aria-label="Agents"
                     aria-multiselectable="true"
                   >
-                    {orderedPersonas.map((persona) => {
-                      const isSelected = selectedPersonaIds.includes(
-                        persona.id,
+                    {orderedMembers.map((member) => {
+                      const isSelected = selectedMemberKeys.includes(
+                        member.key,
                       );
 
                       return (
                         <div
                           className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/50"
-                          key={persona.id}
+                          key={member.key}
                           onClick={() => {
                             if (!isPending) {
-                              togglePersona(persona.id);
+                              toggleMember(member.key);
                             }
                           }}
                           onKeyDown={(event) => {
@@ -407,7 +438,7 @@ export function TeamDialog({
                               (event.key === "Enter" || event.key === " ")
                             ) {
                               event.preventDefault();
-                              togglePersona(persona.id);
+                              toggleMember(member.key);
                             }
                           }}
                           role="option"
@@ -421,13 +452,13 @@ export function TeamDialog({
                             tabIndex={-1}
                           />
                           <ProfileAvatar
-                            avatarUrl={persona.avatarUrl}
+                            avatarUrl={member.avatarUrl}
                             className="h-6 w-6 text-2xs"
-                            label={persona.displayName}
+                            label={member.displayName}
                           />
-                          <span className="text-sm">{persona.displayName}</span>
-                          {persona.isBuiltIn ? (
-                            <Badge variant="secondary">Built-in</Badge>
+                          <span className="text-sm">{member.displayName}</span>
+                          {member.kind === "persona" ? (
+                            <Badge variant="secondary">Team pack</Badge>
                           ) : null}
                         </div>
                       );
@@ -499,7 +530,7 @@ export function TeamDialog({
                 <Button
                   disabled={
                     name.trim().length === 0 ||
-                    selectedPersonaIds.length === 0 ||
+                    selectedMemberKeys.length === 0 ||
                     isPending
                   }
                   onClick={() => void handleSubmit()}
@@ -518,7 +549,7 @@ export function TeamDialog({
         open={confirmRemovalOpen}
         onOpenChange={setConfirmRemovalOpen}
         isPending={isPending}
-        memberNames={removedPersonaNames as string[]}
+        memberNames={removedMembers.map((member) => member.displayName)}
         onKeepAgents={() => void handleSubmitKeepAgents()}
         onRemoveAgents={() => void handleSubmitDeleteAgents()}
       />

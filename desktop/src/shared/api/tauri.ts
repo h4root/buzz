@@ -1141,6 +1141,7 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         systemPrompt: input.systemPrompt,
         avatarUrl: input.avatarUrl,
         model: input.model,
+        provider: input.provider,
         envVars: input.envVars ?? {},
         spawnAfterCreate: input.spawnAfterCreate,
         startOnAppLaunch: input.startOnAppLaunch,
@@ -1173,13 +1174,10 @@ export async function stopManagedAgent(pubkey: string): Promise<ManagedAgent> {
   return fromRawManagedAgent(response);
 }
 
-export async function deleteManagedAgent(
-  pubkey: string,
-  forceRemoteDelete?: boolean,
-): Promise<void> {
+export async function deleteManagedAgent(pubkey: string, force?: boolean) {
   await invokeTauri("delete_managed_agent", {
     pubkey,
-    forceRemoteDelete: forceRemoteDelete ?? null,
+    forceRemoteDelete: force ?? null,
   });
 }
 

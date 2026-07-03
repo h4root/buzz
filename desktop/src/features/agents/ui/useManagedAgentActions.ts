@@ -2,8 +2,7 @@ import * as React from "react";
 
 import {
   type AttachManagedAgentToChannelResult,
-  useAvailableAcpRuntimes,
-  useCreateManagedAgentMutation,
+  useExportAgentJsonMutation,
   useManagedAgentLogQuery,
   useManagedAgentsQuery,
   useRelayAgentsQuery,
@@ -17,15 +16,17 @@ import { usePresenceQuery } from "@/features/presence/hooks";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
 import type {
-  AcpRuntime,
-  AcpRuntimeCatalogEntry,
-  AgentPersona,
+  AgentTemplate,
   Channel,
-  CreateManagedAgentInput,
   CreateManagedAgentResponse,
   ManagedAgent,
 } from "@/shared/api/types";
 import { removeChannelMember } from "@/shared/api/tauri";
+import {
+  parsePersonaFiles,
+  type ParsePersonaFilesResult,
+} from "@/shared/api/tauriPersonas";
+import { isSingleItemFile } from "@/shared/lib/fileMagic";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   deleteManagedAgentWithRules,
@@ -33,7 +34,13 @@ import {
   startManagedAgentWithRules,
   stopManagedAgentWithRules,
 } from "../lib/managedAgentControlActions";
-import { resolvePersonaRuntime } from "../lib/resolvePersonaRuntime";
+import {
+  blankAgentDraft,
+  duplicateAgentDraft,
+  importAgentDraft,
+  templateAgentDraft,
+  type AgentDraft,
+} from "./agentDraft";
 
 export function useManagedAgentActions() {
   const relayAgentsQuery = useRelayAgentsQuery();
@@ -43,18 +50,17 @@ export function useManagedAgentActions() {
   const startMutation = useStartManagedAgentMutation();
   const stopMutation = useStopManagedAgentMutation();
   const deleteMutation = useDeleteManagedAgentMutation();
-  const createAgentMutation = useCreateManagedAgentMutation();
-  const availableRuntimesQuery = useAvailableAcpRuntimes();
   const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
-  const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const exportAgentJsonMutation = useExportAgentJsonMutation();
+  const [isCreateStartOpen, setIsCreateStartOpen] = React.useState(false);
+  const [createDraft, setCreateDraft] = React.useState<AgentDraft | null>(null);
+  const [batchImportResult, setBatchImportResult] =
+    React.useState<ParsePersonaFilesResult | null>(null);
+  const [batchImportFileName, setBatchImportFileName] = React.useState("");
   const [agentToAddToChannel, setAgentToAddToChannel] =
     React.useState<ManagedAgent | null>(null);
   const [createdAgent, setCreatedAgent] =
     React.useState<CreateManagedAgentResponse | null>(null);
-  const [startingPersonaIds, setStartingPersonaIds] = React.useState<
-    ReadonlySet<string>
-  >(() => new Set());
-  const startingPersonaIdsRef = React.useRef(new Set<string>());
   const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
     null,
   );
@@ -172,94 +178,76 @@ export function useManagedAgentActions() {
     }
   }
 
-  async function getAvailableRuntimesForStart() {
-    if (availableRuntimesQuery.isFetched) {
-      return availableRuntimesQuery.data ?? [];
-    }
+  // ── Create Agent wizard ────────────────────────────────────────────────
 
-    const result = await availableRuntimesQuery.refetch();
-    return filterAvailableRuntimes(result.data);
+  function openCreateStart() {
+    clearFeedback();
+    setIsCreateStartOpen(true);
   }
 
-  function setPersonaStartPending(personaId: string, pending: boolean) {
-    const next = new Set(startingPersonaIdsRef.current);
-    if (pending) {
-      next.add(personaId);
-    } else {
-      next.delete(personaId);
-    }
-    startingPersonaIdsRef.current = next;
-    setStartingPersonaIds(next);
+  function openCreateWithDraft(draft: AgentDraft) {
+    clearFeedback();
+    setIsCreateStartOpen(false);
+    setCreateDraft(draft);
   }
 
-  async function handleStartPersona(persona: AgentPersona) {
-    if (startingPersonaIdsRef.current.has(persona.id)) {
-      return;
-    }
-    setPersonaStartPending(persona.id, true);
+  function handlePickBlank() {
+    openCreateWithDraft(blankAgentDraft());
+  }
+
+  function handlePickTemplate(template: AgentTemplate) {
+    openCreateWithDraft(templateAgentDraft(template));
+  }
+
+  function openDuplicateAgent(agent: ManagedAgent) {
+    openCreateWithDraft(duplicateAgentDraft(agent));
+  }
+
+  async function handleImportAgentFile(fileBytes: number[], fileName: string) {
     clearFeedback();
     try {
-      const runtimes = await getAvailableRuntimesForStart();
-      const defaultRuntime = runtimes[0] ?? null;
-      const { runtime, warnings, isOverridden } = resolvePersonaRuntime(
-        persona.runtime,
-        runtimes,
-        defaultRuntime,
-      );
-
-      if (!runtime) {
-        throw new Error("No available runtime found for this agent.");
-      }
-      if (isOverridden) {
-        throw new Error(
-          warnings[0] ??
-            "This agent's configured runtime is not available. Install the runtime or edit the agent before starting it.",
-        );
-      }
-
-      const input: CreateManagedAgentInput = {
-        name: persona.displayName,
-        acpCommand: "buzz-acp",
-        agentCommand: runtime.command,
-        agentArgs: runtime.defaultArgs,
-        mcpCommand: runtime.mcpCommand ?? "",
-        personaId: persona.id,
-        systemPrompt: persona.systemPrompt,
-        avatarUrl: persona.avatarUrl ?? undefined,
-        model: persona.model ?? undefined,
-        envVars: persona.envVars,
-        spawnAfterCreate: true,
-        startOnAppLaunch: true,
-        backend: { type: "local" },
-        harnessOverride: !persona.runtime || persona.runtime === runtime.id,
-      };
-
-      const created = await createAgentMutation.mutateAsync(input);
-      setCreatedAgent(created);
-      const notices = [...warnings];
-
-      if (created.spawnError) {
-        setActionErrorMessage(created.spawnError);
+      const result = await parsePersonaFiles(fileBytes, fileName);
+      if (
+        isSingleItemFile(fileBytes, fileName) &&
+        result.personas.length === 1
+      ) {
+        openCreateWithDraft(importAgentDraft(result.personas[0]));
+      } else if (result.personas.length > 0) {
+        setIsCreateStartOpen(false);
+        setBatchImportResult(result);
+        setBatchImportFileName(fileName);
       } else {
-        notices.push(`Started ${created.agent.name}.`);
+        setActionErrorMessage("No valid agents found in file.");
       }
-
-      if (created.profileSyncError) {
-        notices.push(created.profileSyncError);
-      }
-      if (notices.length > 0) {
-        setActionNoticeMessage(notices.join(" "));
-      }
-
-      void managedAgentsQuery.refetch();
-      void relayAgentsQuery.refetch();
     } catch (error) {
       setActionErrorMessage(
-        error instanceof Error ? error.message : "Failed to start agent.",
+        error instanceof Error ? error.message : "Failed to parse agent file.",
       );
-    } finally {
-      setPersonaStartPending(persona.id, false);
     }
+  }
+
+  function handleBatchImportComplete(count: number) {
+    clearFeedback();
+    setBatchImportResult(null);
+    setActionNoticeMessage(`Imported ${count} agent${count !== 1 ? "s" : ""}.`);
+    void managedAgentsQuery.refetch();
+    void relayAgentsQuery.refetch();
+  }
+
+  function handleExportAgent(agent: ManagedAgent) {
+    clearFeedback();
+    exportAgentJsonMutation.mutate(agent.pubkey, {
+      onSuccess: (saved) => {
+        if (saved) {
+          setActionNoticeMessage(`Exported ${agent.name}.`);
+        }
+      },
+      onError: (error) => {
+        setActionErrorMessage(
+          error instanceof Error ? error.message : "Failed to export agent.",
+        );
+      },
+    });
   }
 
   async function getChannelsForAction() {
@@ -445,10 +433,10 @@ export function useManagedAgentActions() {
   }
 
   const isPending =
-    createAgentMutation.isPending ||
     startMutation.isPending ||
     stopMutation.isPending ||
     startOnLaunchMutation.isPending ||
+    exportAgentJsonMutation.isPending ||
     deleteMutation.isPending;
   const startingAgentPubkey =
     startMutation.isPending && typeof startMutation.variables === "string"
@@ -465,8 +453,13 @@ export function useManagedAgentActions() {
     channelIdToName,
     channelsByPubkey,
     isPending,
-    isCreateOpen,
-    setIsCreateOpen,
+    isCreateStartOpen,
+    setIsCreateStartOpen,
+    createDraft,
+    setCreateDraft,
+    batchImportResult,
+    setBatchImportResult,
+    batchImportFileName,
     agentToAddToChannel,
     setAgentToAddToChannel,
     createdAgent,
@@ -478,9 +471,14 @@ export function useManagedAgentActions() {
     actionErrorMessage,
     setActionErrorMessage,
     startingAgentPubkey,
-    startingPersonaIds,
+    openCreateStart,
+    handlePickBlank,
+    handlePickTemplate,
+    openDuplicateAgent,
+    handleImportAgentFile,
+    handleBatchImportComplete,
+    handleExportAgent,
     handleStart,
-    handleStartPersona,
     handleStop,
     handleDelete,
     handleToggleStartOnAppLaunch,
@@ -490,12 +488,4 @@ export function useManagedAgentActions() {
     refetchManagedAgents: () => void managedAgentsQuery.refetch(),
     refetchRelayAgents: () => void relayAgentsQuery.refetch(),
   };
-}
-
-function filterAvailableRuntimes(
-  runtimes: readonly AcpRuntimeCatalogEntry[] | undefined,
-): AcpRuntime[] {
-  return (runtimes ?? []).filter(
-    (runtime): runtime is AcpRuntime => runtime.availability === "available",
-  );
 }

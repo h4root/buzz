@@ -2,8 +2,9 @@ import * as React from "react";
 import { Users } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { useAvailableAcpRuntimes } from "@/features/agents/hooks";
 import type { ParsedTeamPreview } from "@/shared/api/tauriTeams";
-import { createPersona } from "@/shared/api/tauriPersonas";
+import { createManagedAgent } from "@/shared/api/tauri";
 import { promptPreview } from "@/shared/lib/promptPreview";
 import {
   ImportStatusIcon,
@@ -26,7 +27,7 @@ type TeamImportDialogProps = {
   onComplete: (
     teamName: string,
     teamDescription: string | null,
-    personaIds: string[],
+    agentPubkeys: string[],
   ) => void;
 };
 
@@ -45,8 +46,9 @@ export function TeamImportDialog({
     Map<number, ImportItemStatus>
   >(new Map());
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const runtimesQuery = useAvailableAcpRuntimes({ enabled: open });
 
-  const personas = preview?.personas ?? [];
+  const members = preview?.personas ?? [];
 
   React.useEffect(() => {
     if (!open) {
@@ -59,7 +61,16 @@ export function TeamImportDialog({
   }, [open]);
 
   async function handleImport() {
-    if (!preview || personas.length === 0) {
+    if (!preview || members.length === 0) {
+      return;
+    }
+
+    const runtime = (runtimesQuery.data ?? [])[0] ?? null;
+    if (!runtime) {
+      setStatus("error");
+      setErrorMessage(
+        "No available agent runtime found. Visit Settings > Doctor to set one up.",
+      );
       return;
     }
 
@@ -67,16 +78,16 @@ export function TeamImportDialog({
     setErrorMessage(null);
 
     const initialStatuses = new Map<number, ImportItemStatus>();
-    for (let i = 0; i < personas.length; i++) {
+    for (let i = 0; i < members.length; i++) {
       initialStatuses.set(i, "pending");
     }
     setItemStatuses(new Map(initialStatuses));
 
-    const personaIds: string[] = [];
+    const agentPubkeys: string[] = [];
     let completed = 0;
 
-    for (let i = 0; i < personas.length; i++) {
-      const persona = personas[i];
+    for (let i = 0; i < members.length; i++) {
+      const member = members[i];
 
       setItemStatuses((prev) => {
         const next = new Map(prev);
@@ -85,12 +96,21 @@ export function TeamImportDialog({
       });
 
       try {
-        const created = await createPersona({
-          displayName: persona.display_name,
-          systemPrompt: persona.system_prompt,
-          avatarUrl: persona.avatar_url ?? undefined,
+        // Imported team members are created stopped so a large team never
+        // spawns a fleet of processes at once.
+        const created = await createManagedAgent({
+          name: member.display_name,
+          acpCommand: "buzz-acp",
+          agentCommand: runtime.command,
+          agentArgs: runtime.defaultArgs,
+          mcpCommand: runtime.mcpCommand ?? "",
+          systemPrompt: member.system_prompt || undefined,
+          avatarUrl: member.avatar_url ?? undefined,
+          spawnAfterCreate: false,
+          startOnAppLaunch: false,
+          backend: { type: "local" },
         });
-        personaIds.push(created.id);
+        agentPubkeys.push(created.agent.pubkey);
         completed += 1;
         setImportedCount(completed);
         setItemStatuses((prev) => {
@@ -106,21 +126,21 @@ export function TeamImportDialog({
         });
         setStatus("error");
         setErrorMessage(
-          `Imported ${completed} of ${personas.length} personas. Failed on '${persona.display_name}': ${error instanceof Error ? error.message : String(error)}. Already-imported personas are saved.`,
+          `Imported ${completed} of ${members.length} agents. Failed on '${member.display_name}': ${error instanceof Error ? error.message : String(error)}. Already-imported agents are saved.`,
         );
         return;
       }
     }
 
     setStatus("done");
-    onComplete(preview.name, preview.description, personaIds);
+    onComplete(preview.name, preview.description, agentPubkeys);
   }
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
-          <DialogTitle>Import Team</DialogTitle>
+          <DialogTitle>Import team</DialogTitle>
           <DialogDescription>
             Preview the team from {fileName || "file"} before importing.
           </DialogDescription>
@@ -142,20 +162,19 @@ export function TeamImportDialog({
                   ) : null}
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {personas.length}{" "}
-                  {personas.length === 1 ? "persona" : "personas"}
+                  {members.length} {members.length === 1 ? "agent" : "agents"}
                 </span>
               </div>
 
               <div className="space-y-1">
-                <p className="text-sm font-medium">Personas to import</p>
+                <p className="text-sm font-medium">Agents to import</p>
                 <p className="text-xs text-muted-foreground">
-                  Each persona will be created, then grouped into a new team.
+                  Each agent will be created, then grouped into a new team.
                 </p>
               </div>
 
               <div className="space-y-1">
-                {personas.map((persona, index) => (
+                {members.map((persona, index) => (
                   <div
                     className="flex items-center gap-3 rounded-lg border border-border/60 bg-card/80 px-3 py-2.5"
                     // biome-ignore lint/suspicious/noArrayIndexKey: static list from imported JSON file, never reordered
@@ -200,7 +219,7 @@ export function TeamImportDialog({
           <Button
             disabled={
               !preview ||
-              personas.length === 0 ||
+              members.length === 0 ||
               status === "importing" ||
               status === "done" ||
               status === "error"
@@ -210,8 +229,8 @@ export function TeamImportDialog({
             type="button"
           >
             {status === "importing"
-              ? `Importing ${importedCount}/${personas.length}...`
-              : `Import team (${personas.length} personas)`}
+              ? `Importing ${importedCount}/${members.length}...`
+              : `Import team (${members.length} agent${members.length === 1 ? "" : "s"})`}
           </Button>
         </div>
       </DialogContent>

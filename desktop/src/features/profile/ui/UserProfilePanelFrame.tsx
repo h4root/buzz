@@ -15,7 +15,6 @@ type UserProfilePanelFrameProps = {
   onClose: () => void;
   onResetWidth?: () => void;
   onResizeStart?: React.PointerEventHandler<HTMLButtonElement>;
-  personaDialogs: React.ReactNode;
   profileBody: React.ReactNode;
   splitPaneClamp: boolean;
   widthPx: number;
@@ -34,7 +33,6 @@ export function UserProfilePanelFrame({
   onClose,
   onResetWidth,
   onResizeStart,
-  personaDialogs,
   profileBody,
   splitPaneClamp,
   widthPx,
@@ -54,7 +52,6 @@ export function UserProfilePanelFrame({
         <>
           {editAgentDialog}
           {addAgentToChannelDialog}
-          {personaDialogs}
         </>
       }
       splitPaneClamp={splitPaneClamp}

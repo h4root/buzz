@@ -5,8 +5,11 @@ import {
   managedAgentsQueryKey,
   personasQueryKey,
   teamsQueryKey,
+  useAvailableAcpRuntimes,
   useCreateTeamMutation,
   useDeleteTeamMutation,
+  useManagedAgentsQuery,
+  usePersonasQuery,
   useTeamsQuery,
   useUpdateTeamMutation,
 } from "@/features/agents/hooks";
@@ -20,19 +23,21 @@ import {
   pickTeamDirectory,
   syncTeamDirectory,
 } from "@/shared/api/tauriTeams";
+import { deletePersona, updatePersona } from "@/shared/api/tauriPersonas";
 import {
-  createPersona,
-  deletePersona,
-  updatePersona,
-} from "@/shared/api/tauriPersonas";
+  createManagedAgent,
+  deleteManagedAgent,
+  updateManagedAgent,
+} from "@/shared/api/tauri";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type {
-  AgentPersona,
+  AcpRuntime,
   AgentTeam,
   Channel,
   CreateTeamInput,
   UpdateTeamInput,
 } from "@/shared/api/types";
+import type { RemovedTeamMemberRef } from "./TeamDialog";
 import { buildTeamImportPlan } from "./teamImportPlan";
 
 type TeamDialogState = {
@@ -53,11 +58,10 @@ type RefetchCallbacks = {
 };
 
 type TeamImportUpdateApplyInput = {
-  personas: AgentPersona[];
   updateTeamInfo: boolean;
-  selectedUpdatedPersonaIds: string[];
+  selectedUpdatedMemberIds: string[];
   selectedNewMemberIndexes: number[];
-  missingPersonaIdsToRemove: string[];
+  missingMemberIdsToRemove: string[];
   deleteRemovedAgents: boolean;
 };
 
@@ -67,6 +71,9 @@ export function useTeamActions(
 ) {
   const queryClient = useQueryClient();
   const teamsQuery = useTeamsQuery();
+  const personasQuery = usePersonasQuery();
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const availableRuntimesQuery = useAvailableAcpRuntimes();
   const createTeamMutation = useCreateTeamMutation();
   const updateTeamMutation = useUpdateTeamMutation();
   const deleteTeamMutation = useDeleteTeamMutation();
@@ -96,6 +103,16 @@ export function useTeamActions(
     React.useState(false);
 
   const teams = teamsQuery.data ?? [];
+
+  async function getImportRuntimes(): Promise<AcpRuntime[]> {
+    if (availableRuntimesQuery.isFetched) {
+      return availableRuntimesQuery.data ?? [];
+    }
+    const result = await availableRuntimesQuery.refetch();
+    return (result.data ?? []).filter(
+      (runtime): runtime is AcpRuntime => runtime.availability === "available",
+    );
+  }
 
   async function handleTeamSubmit(input: CreateTeamInput | UpdateTeamInput) {
     actions.setActionNoticeMessage(null);
@@ -158,12 +175,13 @@ export function useTeamActions(
     actions.setActionErrorMessage(null);
     setTeamDialogState({
       title: "Create team",
-      description: "Group personas together for quick deployment to channels.",
+      description: "Group agents together for quick deployment to channels.",
       submitLabel: "Create team",
       initialValues: {
         name: "",
         description: "",
         personaIds: [],
+        agentPubkeys: [],
       },
     });
   }
@@ -179,6 +197,7 @@ export function useTeamActions(
         name: `${team.name} copy`,
         description: team.description ?? "",
         personaIds: [...team.personaIds],
+        agentPubkeys: [...team.agentPubkeys],
       },
     });
   }
@@ -315,11 +334,10 @@ export function useTeamActions(
   }
 
   async function handleTeamImportUpdateApply({
-    personas,
     updateTeamInfo,
-    selectedUpdatedPersonaIds,
+    selectedUpdatedMemberIds,
     selectedNewMemberIndexes,
-    missingPersonaIdsToRemove,
+    missingMemberIdsToRemove,
     deleteRemovedAgents,
   }: TeamImportUpdateApplyInput) {
     if (!teamImportTarget || !teamImportTargetPreview) {
@@ -330,80 +348,101 @@ export function useTeamActions(
     actions.setActionErrorMessage(null);
     setIsApplyingTeamImportUpdate(true);
 
+    const personas = personasQuery.data ?? [];
+    const agents = managedAgentsQuery.data ?? [];
     const plan = buildTeamImportPlan({
       team: teamImportTarget,
       personas,
+      agents,
       preview: teamImportTargetPreview.preview,
     });
-    const selectedUpdatedPersonaIdSet = new Set(selectedUpdatedPersonaIds);
+    const selectedUpdatedMemberIdSet = new Set(selectedUpdatedMemberIds);
     const selectedNewMemberIndexSet = new Set(selectedNewMemberIndexes);
-    const removePersonaIdSet = new Set(missingPersonaIdsToRemove);
+    const removeMemberIdSet = new Set(missingMemberIdsToRemove);
 
     try {
       let updatedMembersCount = 0;
       for (const member of plan.membersToUpdate) {
-        if (!selectedUpdatedPersonaIdSet.has(member.existing.id)) {
+        if (!selectedUpdatedMemberIdSet.has(member.existing.id)) {
           continue;
         }
-        await updatePersona({
-          id: member.existing.id,
-          displayName: member.imported.display_name,
-          systemPrompt: member.imported.system_prompt,
-          avatarUrl: member.imported.avatar_url ?? undefined,
-          runtime: member.existing.runtime ?? undefined,
-          model: member.existing.model ?? undefined,
-          namePool: [...member.existing.namePool],
-        });
+        if (member.existing.kind === "persona") {
+          const persona = personas.find((p) => p.id === member.existing.id);
+          await updatePersona({
+            id: member.existing.id,
+            displayName: member.imported.display_name,
+            systemPrompt: member.imported.system_prompt,
+            avatarUrl: member.imported.avatar_url ?? undefined,
+            runtime: persona?.runtime ?? undefined,
+            model: persona?.model ?? undefined,
+            namePool: persona ? [...persona.namePool] : [],
+          });
+        } else {
+          await updateManagedAgent({
+            pubkey: member.existing.id,
+            name: member.imported.display_name,
+            systemPrompt: member.imported.system_prompt || undefined,
+          });
+        }
         updatedMembersCount += 1;
       }
 
-      const createdPersonaIdsByImportedIndex = new Map<number, string>();
+      // New members are created as (stopped) managed agents.
+      const runtimes = await getImportRuntimes();
+      const createdPubkeysByImportedIndex = new Map<number, string>();
       for (const member of plan.newMembers) {
         if (!selectedNewMemberIndexSet.has(member.importedIndex)) {
           continue;
         }
-        const created = await createPersona({
-          displayName: member.imported.display_name,
-          systemPrompt: member.imported.system_prompt,
+        const runtime = runtimes[0];
+        if (!runtime) {
+          throw new Error(
+            "No available agent runtime found. Visit Settings > Doctor to set one up.",
+          );
+        }
+        const created = await createManagedAgent({
+          name: member.imported.display_name,
+          acpCommand: "buzz-acp",
+          agentCommand: runtime.command,
+          agentArgs: runtime.defaultArgs,
+          mcpCommand: runtime.mcpCommand ?? "",
+          systemPrompt: member.imported.system_prompt || undefined,
           avatarUrl: member.imported.avatar_url ?? undefined,
+          spawnAfterCreate: false,
+          startOnAppLaunch: false,
+          backend: { type: "local" },
         });
-        createdPersonaIdsByImportedIndex.set(member.importedIndex, created.id);
-      }
-
-      const matchedPersonaIdsByImportedIndex = new Map<number, string>();
-      for (const member of plan.matchedMembers) {
-        matchedPersonaIdsByImportedIndex.set(
+        createdPubkeysByImportedIndex.set(
           member.importedIndex,
-          member.existing.id,
+          created.agent.pubkey,
         );
       }
 
       const nextPersonaIds: string[] = [];
-      for (
-        let importedIndex = 0;
-        importedIndex < teamImportTargetPreview.preview.personas.length;
-        importedIndex += 1
-      ) {
-        const matchedId = matchedPersonaIdsByImportedIndex.get(importedIndex);
-        if (matchedId) {
-          nextPersonaIds.push(matchedId);
-          continue;
+      const nextAgentPubkeys: string[] = [];
+      const pushMember = (kind: "agent" | "persona", id: string) => {
+        if (kind === "persona") {
+          nextPersonaIds.push(id);
+        } else {
+          nextAgentPubkeys.push(id);
         }
+      };
 
-        const createdId = createdPersonaIdsByImportedIndex.get(importedIndex);
-        if (createdId) {
-          nextPersonaIds.push(createdId);
-        }
+      for (const member of plan.matchedMembers) {
+        pushMember(member.existing.kind, member.existing.id);
+      }
+      for (const pubkey of createdPubkeysByImportedIndex.values()) {
+        pushMember("agent", pubkey);
       }
 
       const removedMembers = plan.missingMembers.filter((member) =>
-        removePersonaIdSet.has(member.existing.id),
+        removeMemberIdSet.has(member.existing.id),
       );
       const keptMissingMembers = plan.missingMembers.filter(
-        (member) => !removePersonaIdSet.has(member.existing.id),
+        (member) => !removeMemberIdSet.has(member.existing.id),
       );
       for (const member of keptMissingMembers) {
-        nextPersonaIds.push(member.existing.id);
+        pushMember(member.existing.kind, member.existing.id);
       }
 
       const nextTeamName = updateTeamInfo
@@ -418,15 +457,20 @@ export function useTeamActions(
         name: nextTeamName,
         description: nextTeamDescription,
         personaIds: nextPersonaIds,
+        agentPubkeys: nextAgentPubkeys,
       });
 
       let deletedAgentsCount = 0;
       const deleteFailures: string[] = [];
-      const addedMembersCount = createdPersonaIdsByImportedIndex.size;
+      const addedMembersCount = createdPubkeysByImportedIndex.size;
       if (deleteRemovedAgents && removedMembers.length > 0) {
         for (const member of removedMembers) {
           try {
-            await deletePersona(member.existing.id);
+            if (member.existing.kind === "persona") {
+              await deletePersona(member.existing.id);
+            } else {
+              await deleteManagedAgent(member.existing.id);
+            }
             deletedAgentsCount += 1;
           } catch (error) {
             const reason =
@@ -437,7 +481,7 @@ export function useTeamActions(
       }
 
       actions.setActionNoticeMessage(
-        `Updated "${nextTeamName}" from import. ${updatedMembersCount} member${updatedMembersCount === 1 ? "" : "s"} updated, ${addedMembersCount} added, ${removedMembers.length} removed from the team${deleteRemovedAgents ? `, and ${deletedAgentsCount} removed from My Agents` : ""}.`,
+        `Updated "${nextTeamName}" from import. ${updatedMembersCount} member${updatedMembersCount === 1 ? "" : "s"} updated, ${addedMembersCount} added, ${removedMembers.length} removed from the team${deleteRemovedAgents ? `, and ${deletedAgentsCount} deleted` : ""}.`,
       );
 
       if (deleteFailures.length > 0) {
@@ -467,14 +511,15 @@ export function useTeamActions(
   function handleTeamImportComplete(
     teamName: string,
     teamDescription: string | null,
-    personaIds: string[],
+    agentPubkeys: string[],
   ) {
     setTeamImportPreview(null);
     void (async () => {
       const teamInput = {
         name: teamName,
         description: teamDescription ?? undefined,
-        personaIds,
+        personaIds: [],
+        agentPubkeys,
       };
 
       // Try creating the team, retry once on failure.
@@ -482,9 +527,11 @@ export function useTeamActions(
         try {
           await createTeamApi(teamInput);
           actions.setActionNoticeMessage(
-            `Imported team "${teamName}" with ${personaIds.length} persona${personaIds.length !== 1 ? "s" : ""}.`,
+            `Imported team "${teamName}" with ${agentPubkeys.length} agent${agentPubkeys.length !== 1 ? "s" : ""}.`,
           );
-          void queryClient.invalidateQueries({ queryKey: personasQueryKey });
+          void queryClient.invalidateQueries({
+            queryKey: managedAgentsQueryKey,
+          });
           void queryClient.invalidateQueries({ queryKey: teamsQueryKey });
           return;
         } catch {
@@ -492,20 +539,24 @@ export function useTeamActions(
         }
       }
 
-      // Both attempts failed — personas exist but team doesn't.
+      // Both attempts failed — agents exist but team doesn't.
       actions.setActionErrorMessage(
-        `Imported ${personaIds.length} persona${personaIds.length !== 1 ? "s" : ""} but failed to create team "${teamName}". The personas are saved — create a team manually to group them.`,
+        `Imported ${agentPubkeys.length} agent${agentPubkeys.length !== 1 ? "s" : ""} but failed to create team "${teamName}". The agents are saved — create a team manually to group them.`,
       );
-      void queryClient.invalidateQueries({ queryKey: personasQueryKey });
+      void queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
     })();
   }
 
-  async function handleDeleteRemovedPersonas(personaIds: string[]) {
-    for (const id of personaIds) {
+  async function handleDeleteRemovedMembers(members: RemovedTeamMemberRef[]) {
+    for (const member of members) {
       try {
-        await deletePersona(id);
+        if (member.kind === "persona") {
+          await deletePersona(member.id);
+        } else {
+          await deleteManagedAgent(member.id);
+        }
       } catch {
-        // Best-effort: persona may already be deleted or in use elsewhere.
+        // Best-effort: the member may already be deleted or in use elsewhere.
       }
     }
     await Promise.all([
@@ -526,6 +577,7 @@ export function useTeamActions(
         name: team.name,
         description: team.description ?? "",
         personaIds: [...team.personaIds],
+        agentPubkeys: [...team.agentPubkeys],
       },
     });
   }
@@ -549,7 +601,7 @@ export function useTeamActions(
     teamImportTargetPreview,
     isApplyingTeamImportUpdate,
     handleTeamSubmit,
-    handleDeleteRemovedPersonas,
+    handleDeleteRemovedMembers,
     handleDeleteTeam,
     handleTeamDeployed,
     handleExportTeam,

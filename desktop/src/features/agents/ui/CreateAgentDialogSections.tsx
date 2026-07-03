@@ -1,7 +1,6 @@
 import type { AcpRuntime, ManagedAgentPrereqs } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
-import { Textarea } from "@/shared/ui/textarea";
 import { describeResolvedCommand } from "./agentUi";
 
 export function CreateAgentBasicsFields({
@@ -110,7 +109,6 @@ export function CreateAgentRuntimeFields({
   parallelism,
   relayUrl,
   selectedRuntimeId,
-  systemPrompt,
   turnTimeoutSeconds,
   onAcpCommandChange,
   onAgentArgsChange,
@@ -119,7 +117,6 @@ export function CreateAgentRuntimeFields({
   onMcpToolsetsChange,
   onParallelismChange,
   onRelayUrlChange,
-  onSystemPromptChange,
   onTurnTimeoutChange,
 }: {
   acpCommand: string;
@@ -130,7 +127,6 @@ export function CreateAgentRuntimeFields({
   parallelism: string;
   relayUrl: string;
   selectedRuntimeId: string;
-  systemPrompt: string;
   turnTimeoutSeconds: string;
   onAcpCommandChange: (value: string) => void;
   onAgentArgsChange: (value: string) => void;
@@ -139,7 +135,6 @@ export function CreateAgentRuntimeFields({
   onMcpToolsetsChange: (value: string) => void;
   onParallelismChange: (value: string) => void;
   onRelayUrlChange: (value: string) => void;
-  onSystemPromptChange: (value: string) => void;
   onTurnTimeoutChange: (value: string) => void;
 }) {
   return (
@@ -315,26 +310,6 @@ export function CreateAgentRuntimeFields({
           Available: default, channel_admin, dms, canvas, workflow_admin,
           identity, forums, social, media. Leave blank for default toolsets
           (default, canvas, forums, dms, media).
-        </p>
-      </div>
-
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium" htmlFor="agent-system-prompt">
-          System prompt override
-        </label>
-        <Textarea
-          aria-describedby="help-agent-system-prompt"
-          data-testid="agent-system-prompt-input"
-          id="agent-system-prompt"
-          onChange={(event) => onSystemPromptChange(event.target.value)}
-          placeholder="Leave blank to send no ACP system prompt"
-          value={systemPrompt}
-        />
-        <p
-          className="text-xs text-muted-foreground"
-          id="help-agent-system-prompt"
-        >
-          Blank means no override. buzz-acp will not add a [System] prompt.
         </p>
       </div>
     </>

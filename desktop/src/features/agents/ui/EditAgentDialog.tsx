@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
+import { Textarea } from "@/shared/ui/textarea";
 import {
   AUTO_MODEL_DROPDOWN_VALUE,
   AUTO_PROVIDER_DROPDOWN_VALUE,
@@ -604,7 +605,7 @@ export function EditAgentDialog({
                     }
                     type="checkbox"
                   />
-                  Inherit runtime from persona
+                  Inherit runtime from team pack
                 </label>
                 <p className="text-xs text-muted-foreground">
                   {inheritHarness
@@ -612,8 +613,8 @@ export function EditAgentDialog({
                         linkedPersona.runtime
                           ? ` (${linkedPersona.runtime})`
                           : ""
-                      }. Editing the persona and respawning propagates the new runtime.`
-                    : "Pins this agent to a specific runtime command, overriding the persona's runtime."}
+                      }. Editing the team pack and respawning propagates the new runtime.`
+                    : "Pins this agent to a specific runtime command, overriding the team pack's runtime."}
                 </p>
               </div>
             ) : null}
@@ -649,6 +650,23 @@ export function EditAgentDialog({
               ) : null}
             </div>
 
+            <div className="space-y-1.5">
+              <label
+                className="text-sm font-medium"
+                htmlFor="edit-agent-instructions"
+              >
+                Agent instructions
+              </label>
+              <Textarea
+                className="min-h-32 resize-y"
+                data-testid="agent-system-prompt-input"
+                id="edit-agent-instructions"
+                onChange={(event) => setSystemPrompt(event.target.value)}
+                placeholder="Describe what this agent should do."
+                value={systemPrompt}
+              />
+            </div>
+
             <CreateAgentRuntimeFields
               acpCommand={acpCommand}
               agentArgs={agentArgs}
@@ -662,7 +680,6 @@ export function EditAgentDialog({
               onMcpToolsetsChange={setMcpToolsets}
               onParallelismChange={setParallelism}
               onRelayUrlChange={setRelayUrl}
-              onSystemPromptChange={setSystemPrompt}
               onTurnTimeoutChange={setTurnTimeoutSeconds}
               parallelism={parallelism}
               relayUrl={relayUrl}
@@ -676,15 +693,14 @@ export function EditAgentDialog({
                     ? "custom"
                     : "inherit"
               }
-              systemPrompt={systemPrompt}
               turnTimeoutSeconds={turnTimeoutSeconds}
             />
 
             <EnvVarsEditor
               disabled={updateMutation.isPending}
-              helperText="Per-agent env vars. Override the persona's vars on collision."
+              helperText="Per-agent env vars. Override the team pack's vars on collision."
               inheritedFrom={inheritedEnvVars}
-              inheritedLabel="persona"
+              inheritedLabel="team pack"
               onChange={setEnvVars}
               value={envVars}
             />

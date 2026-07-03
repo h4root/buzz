@@ -1,7 +1,17 @@
 import type { ParsedTeamPreview } from "@/shared/api/tauriTeams";
-import type { AgentPersona, AgentTeam } from "@/shared/api/types";
+import type { AgentPersona, AgentTeam, ManagedAgent } from "@/shared/api/types";
 
 type ImportedTeamPersona = ParsedTeamPreview["personas"][number];
+
+/** A team member resolved from either an agent record or a pack persona. */
+export type ExistingTeamMember = {
+  kind: "agent" | "persona";
+  /** Agent pubkey or persona id. */
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  systemPrompt: string;
+};
 
 type LineChangeCounts = {
   addedLines: number;
@@ -9,7 +19,7 @@ type LineChangeCounts = {
 };
 
 export type TeamImportMatchedMember = {
-  existing: AgentPersona;
+  existing: ExistingTeamMember;
   imported: ImportedTeamPersona;
   importedIndex: number;
   hasChanges: boolean;
@@ -24,7 +34,7 @@ export type TeamImportNewMember = {
 };
 
 export type TeamImportMissingMember = {
-  existing: AgentPersona;
+  existing: ExistingTeamMember;
   removedLines: number;
 };
 
@@ -33,7 +43,7 @@ export type TeamImportPlan = {
   membersToUpdate: TeamImportMatchedMember[];
   newMembers: TeamImportNewMember[];
   missingMembers: TeamImportMissingMember[];
-  unresolvedPersonaIds: string[];
+  unresolvedMemberIds: string[];
   teamNameChanged: boolean;
   teamDescriptionChanged: boolean;
 };
@@ -41,6 +51,7 @@ export type TeamImportPlan = {
 type BuildTeamImportPlanInput = {
   team: AgentTeam;
   personas: AgentPersona[];
+  agents: ManagedAgent[];
   preview: ParsedTeamPreview;
 };
 
@@ -66,11 +77,11 @@ function normalizePromptLines(prompt: string): string[] {
   return lines;
 }
 
-function existingPersonaSnapshotLines(persona: AgentPersona): string[] {
+function existingMemberSnapshotLines(member: ExistingTeamMember): string[] {
   return [
-    `display_name:${normalizeOptionalText(persona.displayName)}`,
-    `avatar_url:${normalizeAvatar(persona.avatarUrl) ?? ""}`,
-    ...normalizePromptLines(persona.systemPrompt).map(
+    `display_name:${normalizeOptionalText(member.displayName)}`,
+    `avatar_url:${normalizeAvatar(member.avatarUrl) ?? ""}`,
+    ...normalizePromptLines(member.systemPrompt).map(
       (line) => `prompt:${line}`,
     ),
   ];
@@ -151,12 +162,12 @@ function countLineChanges(
   };
 }
 
-function getPersonaLineChangeCounts(
-  existing: AgentPersona,
+function getMemberLineChangeCounts(
+  existing: ExistingTeamMember,
   imported: ImportedTeamPersona,
 ): LineChangeCounts {
   return countLineChanges(
-    existingPersonaSnapshotLines(existing),
+    existingMemberSnapshotLines(existing),
     importedPersonaSnapshotLines(imported),
   );
 }
@@ -165,28 +176,54 @@ function getImportedPersonaLineCount(persona: ImportedTeamPersona): number {
   return importedPersonaSnapshotLines(persona).length;
 }
 
-function getExistingPersonaLineCount(persona: AgentPersona): number {
-  return existingPersonaSnapshotLines(persona).length;
+function getExistingMemberLineCount(member: ExistingTeamMember): number {
+  return existingMemberSnapshotLines(member).length;
 }
 
 export function buildTeamImportPlan({
   team,
   personas,
+  agents,
   preview,
 }: BuildTeamImportPlanInput): TeamImportPlan {
   const personaById = new Map(personas.map((persona) => [persona.id, persona]));
+  const agentByPubkey = new Map(agents.map((agent) => [agent.pubkey, agent]));
   const matchedImportedIndexes = new Set<number>();
   const matchedMembers: TeamImportMatchedMember[] = [];
-  const missingMembers: { existing: AgentPersona }[] = [];
-  const unresolvedPersonaIds: string[] = [];
+  const missingMembers: { existing: ExistingTeamMember }[] = [];
+  const unresolvedMemberIds: string[] = [];
 
+  const existingMembers: ExistingTeamMember[] = [];
   for (const personaId of team.personaIds) {
-    const existing = personaById.get(personaId);
-    if (!existing) {
-      unresolvedPersonaIds.push(personaId);
+    const persona = personaById.get(personaId);
+    if (!persona) {
+      unresolvedMemberIds.push(personaId);
       continue;
     }
+    existingMembers.push({
+      kind: "persona",
+      id: persona.id,
+      displayName: persona.displayName,
+      avatarUrl: persona.avatarUrl,
+      systemPrompt: persona.systemPrompt,
+    });
+  }
+  for (const pubkey of team.agentPubkeys) {
+    const agent = agentByPubkey.get(pubkey);
+    if (!agent) {
+      unresolvedMemberIds.push(pubkey);
+      continue;
+    }
+    existingMembers.push({
+      kind: "agent",
+      id: agent.pubkey,
+      displayName: agent.name,
+      avatarUrl: agent.avatarUrl,
+      systemPrompt: agent.systemPrompt ?? "",
+    });
+  }
 
+  for (const existing of existingMembers) {
     const existingName = normalizeName(existing.displayName);
     const importedIndex = preview.personas.findIndex(
       (imported, index) =>
@@ -201,7 +238,7 @@ export function buildTeamImportPlan({
 
     matchedImportedIndexes.add(importedIndex);
     const imported = preview.personas[importedIndex];
-    const { addedLines, removedLines } = getPersonaLineChangeCounts(
+    const { addedLines, removedLines } = getMemberLineChangeCounts(
       existing,
       imported,
     );
@@ -234,9 +271,9 @@ export function buildTeamImportPlan({
     newMembers,
     missingMembers: missingMembers.map((member) => ({
       ...member,
-      removedLines: getExistingPersonaLineCount(member.existing),
+      removedLines: getExistingMemberLineCount(member.existing),
     })),
-    unresolvedPersonaIds,
+    unresolvedMemberIds,
     teamNameChanged: normalizeOptionalText(team.name) !== preview.name,
     teamDescriptionChanged:
       normalizeOptionalText(team.description) !==

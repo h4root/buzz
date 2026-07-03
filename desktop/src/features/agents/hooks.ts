@@ -30,7 +30,11 @@ import {
   setPersonaActive,
   updatePersona,
 } from "@/shared/api/tauriPersonas";
-import { setManagedAgentStartOnAppLaunch } from "@/shared/api/tauriManagedAgents";
+import {
+  exportAgentToJson,
+  listAgentTemplates,
+  setManagedAgentStartOnAppLaunch,
+} from "@/shared/api/tauriManagedAgents";
 import {
   createTeam,
   deleteTeam,
@@ -75,6 +79,7 @@ export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const teamsQueryKey = ["teams"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
+export const agentTemplatesQueryKey = ["agent-templates"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 export const backendProvidersQueryKey = ["backend-providers"] as const;
 
@@ -172,6 +177,22 @@ export function usePersonasQuery() {
     queryFn: listPersonas,
     staleTime: 30_000,
     refetchInterval: 30_000,
+  });
+}
+
+export function useAgentTemplatesQuery(options?: { enabled?: boolean }) {
+  return useQuery({
+    enabled: options?.enabled ?? true,
+    queryKey: agentTemplatesQueryKey,
+    queryFn: listAgentTemplates,
+    // Static built-in data — never refetch.
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+export function useExportAgentJsonMutation() {
+  return useMutation({
+    mutationFn: (pubkey: string) => exportAgentToJson(pubkey),
   });
 }
 

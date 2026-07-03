@@ -1,26 +1,27 @@
 import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 
+import { useAvailableAcpRuntimes } from "@/features/agents/hooks";
 import {
-  useAvailableAcpRuntimes,
-  useCreateChannelManagedAgentsMutation,
-} from "@/features/agents/hooks";
-import type { CreateChannelManagedAgentsResult } from "@/features/agents/channelAgents";
-import {
-  emptyResolvedTeamPersonas,
-  resolveTeamPersonas,
-} from "@/features/agents/lib/teamPersonas";
+  attachManagedAgentToChannel,
+  createChannelManagedAgents,
+  type CreateChannelManagedAgentInput,
+  type CreateChannelManagedAgentsResult,
+} from "@/features/agents/channelAgents";
+import { resolveTeamMembers } from "@/features/agents/lib/teamMembers";
 import {
   collectRuntimeWarnings,
   resolvePersonaRuntime,
 } from "@/features/agents/lib/resolvePersonaRuntime";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   AgentPersona,
   AgentTeam,
   Channel,
   ChannelRole,
+  ManagedAgent,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
@@ -34,6 +35,7 @@ import {
 type AddTeamToChannelDialogProps = {
   team: AgentTeam | null;
   personas: AgentPersona[];
+  agents: ManagedAgent[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDeployed: (
@@ -45,17 +47,64 @@ type AddTeamToChannelDialogProps = {
 export function AddTeamToChannelDialog({
   team,
   personas,
+  agents,
   open,
   onOpenChange,
   onDeployed,
 }: AddTeamToChannelDialogProps) {
   const channelsQuery = useChannelsQuery();
   const providersQuery = useAvailableAcpRuntimes();
+  const queryClient = useQueryClient();
   const [channelId, setChannelId] = React.useState("");
   const [role, setRole] = React.useState<Exclude<ChannelRole, "owner">>("bot");
-  const deployMutation = useCreateChannelManagedAgentsMutation(
-    channelId || null,
-  );
+  const deployMutation = useMutation({
+    mutationFn: async (input: {
+      channelId: string;
+      personaInputs: CreateChannelManagedAgentInput[];
+      memberAgents: ManagedAgent[];
+    }): Promise<CreateChannelManagedAgentsResult> => {
+      // Existing agent members attach directly; pack persona members go
+      // through the persona create/reuse path.
+      const result =
+        input.personaInputs.length > 0
+          ? await createChannelManagedAgents(
+              input.channelId,
+              input.personaInputs,
+            )
+          : { successes: [], failures: [] };
+
+      for (const agent of input.memberAgents) {
+        try {
+          const attached = await attachManagedAgentToChannel(input.channelId, {
+            agent,
+            role,
+          });
+          result.successes.push({
+            ...attached,
+            created: false,
+            runtimeId: "",
+          });
+        } catch (error) {
+          result.failures.push({
+            kind: "generic",
+            name: agent.name,
+            personaId: null,
+            error:
+              error instanceof Error ? error.message : "Failed to add agent.",
+          });
+        }
+      }
+
+      return result;
+    },
+    onSettled: (_data, _error, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ["managed-agents"] });
+      void queryClient.invalidateQueries({ queryKey: ["relay-agents"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["channels", variables?.channelId, "members"],
+      });
+    },
+  });
 
   const channels = React.useMemo(
     () =>
@@ -68,20 +117,28 @@ export function AddTeamToChannelDialog({
   const providers = providersQuery.data ?? [];
   const defaultProvider = providers[0] ?? null;
 
-  const teamPersonaResolution = React.useMemo(
+  const resolution = React.useMemo(
     () =>
-      team ? resolveTeamPersonas(team, personas) : emptyResolvedTeamPersonas(),
-    [team, personas],
+      team
+        ? resolveTeamMembers(team, personas, agents)
+        : resolveTeamMembers(
+            { personaIds: [], agentPubkeys: [] },
+            personas,
+            agents,
+          ),
+    [team, personas, agents],
   );
-  const resolved = teamPersonaResolution.resolvedPersonas;
-  const missingPersonaCount = teamPersonaResolution.missingPersonaCount;
+  const resolvedPersonas = resolution.resolvedPersonas;
+  const resolvedAgents = resolution.resolvedAgents;
+  const resolvedMembers = resolution.resolvedMembers;
+  const missingMemberCount = resolution.missingMemberCount;
 
-  // Surface warnings when a persona's preferred runtime is unavailable.
+  // Surface warnings when a pack persona's preferred runtime is unavailable.
   // This dialog has no runtime selector, so the fallback is always
   // `defaultProvider` (the first available runtime).
   const runtimeWarnings = React.useMemo(
-    () => collectRuntimeWarnings(resolved, providers, defaultProvider),
-    [resolved, providers, defaultProvider],
+    () => collectRuntimeWarnings(resolvedPersonas, providers, defaultProvider),
+    [resolvedPersonas, providers, defaultProvider],
   );
 
   function reset() {
@@ -110,22 +167,28 @@ export function AddTeamToChannelDialog({
     channels.find((channel) => channel.id === channelId) ?? null;
 
   async function handleDeploy() {
-    if (!team || !selectedChannel || !defaultProvider) {
+    if (!team || !selectedChannel) {
+      return;
+    }
+    if (resolvedPersonas.length > 0 && !defaultProvider) {
       return;
     }
 
     try {
-      // Resolve each persona's preferred runtime. This dialog has no
-      // runtime selector, so the fallback is `defaultProvider` (first
-      // available runtime). Warnings are computed separately via the
-      // `runtimeWarnings` memo and rendered as inline alerts above.
-      const inputs = resolved.map((persona) => {
+      // Pack persona members: resolve each persona's preferred runtime.
+      // This dialog has no runtime selector, so the fallback is
+      // `defaultProvider` (first available runtime). Warnings are computed
+      // separately via the `runtimeWarnings` memo above.
+      const personaInputs = resolvedPersonas.map((persona) => {
         const { runtime: personaRuntime } = resolvePersonaRuntime(
           persona.runtime,
           providers,
           defaultProvider,
         );
         const runtimeToUse = personaRuntime ?? defaultProvider;
+        if (!runtimeToUse) {
+          throw new Error("No available runtime found for this team.");
+        }
         return {
           runtime: {
             id: runtimeToUse.id,
@@ -143,7 +206,11 @@ export function AddTeamToChannelDialog({
         };
       });
 
-      const result = await deployMutation.mutateAsync(inputs);
+      const result = await deployMutation.mutateAsync({
+        channelId: selectedChannel.id,
+        personaInputs,
+        memberAgents: resolvedAgents,
+      });
       onDeployed(selectedChannel, result);
       handleOpenChange(false);
     } catch {
@@ -158,31 +225,30 @@ export function AddTeamToChannelDialog({
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Deploy team to channel</DialogTitle>
             <DialogDescription>
-              Create and attach one agent per persona in{" "}
-              <strong>{team?.name ?? "this team"}</strong> to the selected
-              channel.
+              Add every agent in <strong>{team?.name ?? "this team"}</strong> to
+              the selected channel.
             </DialogDescription>
           </DialogHeader>
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
-            {resolved.length > 0 ? (
+            {resolvedMembers.length > 0 ? (
               <div className="space-y-1.5">
                 <span className="text-sm font-medium">
-                  Personas ({resolved.length})
+                  Agents ({resolvedMembers.length})
                 </span>
                 <div className="flex flex-wrap gap-2">
-                  {resolved.map((persona) => (
+                  {resolvedMembers.map((member) => (
                     <div
                       className="flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/30 px-2 py-1"
-                      key={persona.id}
+                      key={member.key}
                     >
                       <ProfileAvatar
-                        avatarUrl={persona.avatarUrl}
+                        avatarUrl={member.avatarUrl}
                         className="h-5 w-5 text-2xs"
-                        label={persona.displayName}
+                        label={member.displayName}
                       />
                       <span className="text-xs font-medium">
-                        {persona.displayName}
+                        {member.displayName}
                       </span>
                     </div>
                   ))}
@@ -235,16 +301,18 @@ export function AddTeamToChannelDialog({
               </select>
             </div>
 
-            {missingPersonaCount > 0 ? (
+            {missingMemberCount > 0 ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                This team references {missingPersonaCount} persona
-                {missingPersonaCount === 1 ? "" : "s"} that{" "}
-                {missingPersonaCount === 1 ? "is" : "are"} no longer in My
-                Agents. Add them back or edit the team before deploying.
+                This team references {missingMemberCount} agent
+                {missingMemberCount === 1 ? "" : "s"} that{" "}
+                {missingMemberCount === 1 ? "is" : "are"} no longer available on
+                this device. Edit the team before deploying.
               </p>
             ) : null}
 
-            {!defaultProvider && !providersQuery.isLoading ? (
+            {resolvedPersonas.length > 0 &&
+            !defaultProvider &&
+            !providersQuery.isLoading ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                 No ACP runtimes found. Make sure an agent runtime (e.g. Goose)
                 is installed.
@@ -289,9 +357,9 @@ export function AddTeamToChannelDialog({
               disabled={
                 !team ||
                 !selectedChannel ||
-                !defaultProvider ||
-                resolved.length === 0 ||
-                missingPersonaCount > 0 ||
+                (resolvedPersonas.length > 0 && !defaultProvider) ||
+                resolvedMembers.length === 0 ||
+                missingMemberCount > 0 ||
                 channelsQuery.isLoading ||
                 providersQuery.isLoading ||
                 deployMutation.isPending
@@ -302,7 +370,7 @@ export function AddTeamToChannelDialog({
             >
               {deployMutation.isPending
                 ? "Deploying..."
-                : `Deploy ${resolved.length} ${resolved.length === 1 ? "agent" : "agents"}`}
+                : `Deploy ${resolvedMembers.length} ${resolvedMembers.length === 1 ? "agent" : "agents"}`}
             </Button>
           </div>
         </div>

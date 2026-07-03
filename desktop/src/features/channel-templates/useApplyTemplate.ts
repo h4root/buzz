@@ -1,20 +1,23 @@
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
+  attachManagedAgentToChannel,
   createChannelManagedAgents,
   type CreateChannelManagedAgentInput,
 } from "@/features/agents/channelAgents";
 import {
+  useAgentTemplatesQuery,
   useAvailableAcpRuntimes,
+  useManagedAgentsQuery,
   usePersonasQuery,
   useTeamsQuery,
 } from "@/features/agents/hooks";
 import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
-import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
+import { resolveTeamMembers } from "@/features/agents/lib/teamMembers";
 import { useLastRuntime } from "@/features/agents/lib/useLastRuntime";
 import { useChannelTemplatesQuery } from "@/features/channel-templates/hooks";
 import { setCanvas } from "@/shared/api/tauri";
-import type { ChannelTemplate } from "@/shared/api/types";
+import type { ChannelTemplate, ManagedAgent } from "@/shared/api/types";
 
 /**
  * TemplateBackend omits `config` — supply an empty object for provider backends.
@@ -32,6 +35,8 @@ export function useApplyTemplate() {
   const acpRuntimesQuery = useAvailableAcpRuntimes();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const agentTemplatesQuery = useAgentTemplatesQuery();
   const { lastRuntimeId } = useLastRuntime();
 
   async function applyCanvas(
@@ -63,12 +68,13 @@ export function useApplyTemplate() {
       (t) => t.id === templateId,
     );
     if (!template) return;
-    const { personas: templatePersonas, teams: templateTeams } =
-      template.agents;
-    if (templatePersonas.length === 0 && templateTeams.length === 0) return;
+    const { personas: templateEntries, teams: templateTeams } = template.agents;
+    if (templateEntries.length === 0 && templateTeams.length === 0) return;
 
     const allPersonas = personasQuery.data ?? [];
     const allTeams = teamsQuery.data ?? [];
+    const allAgents = managedAgentsQuery.data ?? [];
+    const agentTemplates = agentTemplatesQuery.data ?? [];
     const runtimes = acpRuntimesQuery.data ?? [];
     if (runtimes.length === 0) return; // No runtimes — skip silently
 
@@ -77,42 +83,31 @@ export function useApplyTemplate() {
       runtimes.find((p) => p.id === lastRuntimeId) ?? runtimes[0] ?? null;
     if (!defaultProvider) return;
 
-    const seenPersonaIds = new Set<string>();
+    const seenRefs = new Set<string>();
+    const attachAgents: ManagedAgent[] = [];
     const inputs: CreateChannelManagedAgentInput[] = [];
 
-    // Direct personas from template
-    for (const entry of templatePersonas) {
-      const persona = allPersonas.find((p) => p.id === entry.personaId);
-      if (!persona) continue;
-      if (seenPersonaIds.has(persona.id)) continue;
-      seenPersonaIds.add(persona.id);
-      const resolved = resolvePersonaRuntime(
-        entry.runtime ?? persona.runtime,
-        runtimes,
-        defaultProvider,
-      );
-      inputs.push({
-        runtime: resolved.runtime ?? defaultProvider,
-        name: persona.displayName,
-        personaId: persona.id,
-        systemPrompt: persona.systemPrompt,
-        avatarUrl: persona.avatarUrl ?? undefined,
-        model: entry.model ?? persona.model ?? undefined,
-        role: "bot",
-        backend: toManagedBackend(entry.backend),
-      });
-    }
+    // A template member ref (the legacy `personaId` field) can be an agent
+    // pubkey, a pack persona id, or a built-in agent-template id.
+    const resolveEntry = (
+      ref: string,
+      runtimeHint: string | null,
+      model: string | null,
+      backend: ChannelTemplate["agents"]["personas"][number]["backend"],
+    ) => {
+      if (seenRefs.has(ref)) return;
+      seenRefs.add(ref);
 
-    // Team-expanded personas (skip dupes)
-    for (const teamEntry of templateTeams) {
-      const team = allTeams.find((t) => t.id === teamEntry.teamId);
-      if (!team) continue;
-      const { resolvedPersonas } = resolveTeamPersonas(team, allPersonas);
-      for (const persona of resolvedPersonas) {
-        if (seenPersonaIds.has(persona.id)) continue;
-        seenPersonaIds.add(persona.id);
+      const agent = allAgents.find((candidate) => candidate.pubkey === ref);
+      if (agent) {
+        attachAgents.push(agent);
+        return;
+      }
+
+      const persona = allPersonas.find((candidate) => candidate.id === ref);
+      if (persona) {
         const resolved = resolvePersonaRuntime(
-          teamEntry.runtime ?? persona.runtime,
+          runtimeHint ?? persona.runtime,
           runtimes,
           defaultProvider,
         );
@@ -122,17 +117,86 @@ export function useApplyTemplate() {
           personaId: persona.id,
           systemPrompt: persona.systemPrompt,
           avatarUrl: persona.avatarUrl ?? undefined,
-          model: teamEntry.model ?? persona.model ?? undefined,
+          model: model ?? persona.model ?? undefined,
           role: "bot",
-          backend: toManagedBackend(teamEntry.backend),
+          backend: toManagedBackend(backend),
         });
+        return;
+      }
+
+      const agentTemplate = agentTemplates.find(
+        (candidate) => candidate.id === ref,
+      );
+      if (agentTemplate) {
+        const resolved = resolvePersonaRuntime(
+          runtimeHint ?? agentTemplate.runtime,
+          runtimes,
+          defaultProvider,
+        );
+        inputs.push({
+          runtime: resolved.runtime ?? defaultProvider,
+          name: agentTemplate.displayName,
+          systemPrompt: agentTemplate.systemPrompt,
+          avatarUrl: agentTemplate.avatarUrl ?? undefined,
+          model: model ?? agentTemplate.model ?? undefined,
+          role: "bot",
+          backend: toManagedBackend(backend),
+        });
+      }
+    };
+
+    for (const entry of templateEntries) {
+      resolveEntry(entry.personaId, entry.runtime, entry.model, entry.backend);
+    }
+
+    // Team-expanded members (skip dupes)
+    for (const teamEntry of templateTeams) {
+      const team = allTeams.find((t) => t.id === teamEntry.teamId);
+      if (!team) continue;
+      const resolution = resolveTeamMembers(team, allPersonas, allAgents);
+      for (const agent of resolution.resolvedAgents) {
+        resolveEntry(
+          agent.pubkey,
+          teamEntry.runtime,
+          teamEntry.model,
+          teamEntry.backend,
+        );
+      }
+      for (const persona of resolution.resolvedPersonas) {
+        resolveEntry(
+          persona.id,
+          teamEntry.runtime,
+          teamEntry.model,
+          teamEntry.backend,
+        );
       }
     }
 
-    if (inputs.length === 0) return;
+    if (inputs.length === 0 && attachAgents.length === 0) return;
 
     try {
-      const result = await createChannelManagedAgents(channelId, inputs);
+      const result =
+        inputs.length > 0
+          ? await createChannelManagedAgents(channelId, inputs)
+          : { successes: [], failures: [] };
+
+      for (const agent of attachAgents) {
+        try {
+          await attachManagedAgentToChannel(channelId, {
+            agent,
+            role: "bot",
+          });
+        } catch (error) {
+          result.failures.push({
+            kind: "generic",
+            name: agent.name,
+            personaId: null,
+            error:
+              error instanceof Error ? error.message : "Failed to add agent.",
+          });
+        }
+      }
+
       if (result.failures.length > 0) {
         const { toast } = await import("sonner");
         toast.warning(

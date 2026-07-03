@@ -12,7 +12,7 @@ import { toast } from "sonner";
 
 import {
   useAvailableAcpRuntimes,
-  usePersonasQuery,
+  useManagedAgentsQuery,
   useTeamsQuery,
 } from "@/features/agents/hooks";
 import {
@@ -22,11 +22,10 @@ import {
   useDuplicateChannelTemplateMutation,
   useUpdateChannelTemplateMutation,
 } from "@/features/channel-templates/hooks";
-import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
+import { AddChannelBotAgentsSection } from "@/features/channels/ui/AddChannelBotAgentsSection";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type {
   AcpRuntime,
-  AgentPersona,
   AgentTeam,
   ChannelTemplate,
   CreateChannelTemplateInput,
@@ -281,7 +280,7 @@ function TemplateFormDialog({
   const isEditing = template !== null;
   const createMutation = useCreateChannelTemplateMutation();
   const updateMutation = useUpdateChannelTemplateMutation();
-  const personasQuery = usePersonasQuery();
+  const managedAgentsQuery = useManagedAgentsQuery();
   const teamsQuery = useTeamsQuery();
   const providersQuery = useAvailableAcpRuntimes();
   const runtimes = providersQuery.data ?? [];
@@ -289,13 +288,13 @@ function TemplateFormDialog({
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [canvasTemplate, setCanvasTemplate] = React.useState("");
-  const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
+  // Agent member refs, stored in the template's `personaId` wire field.
+  // Legacy templates may carry persona ids or built-in template ids here;
+  // the apply path resolves all three.
+  const [selectedAgentRefs, setSelectedAgentRefs] = React.useState<string[]>(
     [],
   );
   const [selectedTeamIds, setSelectedTeamIds] = React.useState<string[]>([]);
-  const [personaRuntimes, setPersonaRuntimes] = React.useState<
-    Record<string, string>
-  >({});
   const [teamRuntimes, setTeamRuntimes] = React.useState<
     Record<string, string>
   >({});
@@ -308,13 +307,8 @@ function TemplateFormDialog({
       setName(template.name);
       setDescription(template.description ?? "");
       setCanvasTemplate(template.canvasTemplate ?? "");
-      setSelectedPersonaIds(template.agents.personas.map((p) => p.personaId));
+      setSelectedAgentRefs(template.agents.personas.map((p) => p.personaId));
       setSelectedTeamIds(template.agents.teams.map((t) => t.teamId));
-      const pRuntimes: Record<string, string> = {};
-      for (const p of template.agents.personas) {
-        if (p.runtime) pRuntimes[p.personaId] = p.runtime;
-      }
-      setPersonaRuntimes(pRuntimes);
       const tRuntimes: Record<string, string> = {};
       for (const t of template.agents.teams) {
         if (t.runtime) tRuntimes[t.teamId] = t.runtime;
@@ -324,9 +318,8 @@ function TemplateFormDialog({
       setName("");
       setDescription("");
       setCanvasTemplate("");
-      setSelectedPersonaIds([]);
+      setSelectedAgentRefs([]);
       setSelectedTeamIds([]);
-      setPersonaRuntimes({});
       setTeamRuntimes({});
     }
   }, [open, template]);
@@ -337,9 +330,9 @@ function TemplateFormDialog({
     if (!trimmedName) return;
 
     const agents = {
-      personas: selectedPersonaIds.map((personaId) => ({
+      personas: selectedAgentRefs.map((personaId) => ({
         personaId,
-        runtime: personaRuntimes[personaId] || null,
+        runtime: null,
         model: null,
         role: null,
         backend: null,
@@ -394,18 +387,12 @@ function TemplateFormDialog({
     }
   }
 
-  function handleTogglePersona(personaId: string) {
-    setSelectedPersonaIds((prev) => {
-      if (prev.includes(personaId)) {
-        setPersonaRuntimes((pp) => {
-          const next = { ...pp };
-          delete next[personaId];
-          return next;
-        });
-        return prev.filter((id) => id !== personaId);
-      }
-      return [...prev, personaId];
-    });
+  function handleToggleAgent(pubkey: string) {
+    setSelectedAgentRefs((prev) =>
+      prev.includes(pubkey)
+        ? prev.filter((ref) => ref !== pubkey)
+        : [...prev, pubkey],
+    );
   }
 
   function handleToggleTeam(teamId: string) {
@@ -524,15 +511,15 @@ function TemplateFormDialog({
             </p>
           </div>
 
-          {/* Agent Personas */}
-          <AddChannelBotPersonasSection
+          {/* Agents */}
+          <AddChannelBotAgentsSection
+            agents={managedAgentsQuery.data ?? []}
             canToggleSelections={!isPending}
             includeGeneric={false}
-            isLoading={personasQuery.isLoading}
+            isLoading={managedAgentsQuery.isLoading}
+            onToggleAgent={handleToggleAgent}
             onToggleGeneric={() => {}}
-            onTogglePersona={handleTogglePersona}
-            personas={personasQuery.data ?? []}
-            selectedPersonaIds={selectedPersonaIds}
+            selectedAgentPubkeys={selectedAgentRefs}
             showGeneric={false}
           />
 
@@ -548,20 +535,11 @@ function TemplateFormDialog({
           {/* Runtime assignments */}
           <RuntimeAssignments
             isPending={isPending}
-            personas={personasQuery.data ?? []}
-            personaRuntimes={personaRuntimes}
             providers={runtimes}
             providersLoading={providersQuery.isLoading}
-            selectedPersonaIds={selectedPersonaIds}
             selectedTeamIds={selectedTeamIds}
             teamRuntimes={teamRuntimes}
             teams={teamsQuery.data ?? []}
-            onPersonaRuntimeChange={(personaId, runtimeId) =>
-              setPersonaRuntimes((prev) => ({
-                ...prev,
-                [personaId]: runtimeId,
-              }))
-            }
             onTeamRuntimeChange={(teamId, runtimeId) =>
               setTeamRuntimes((prev) => ({ ...prev, [teamId]: runtimeId }))
             }
@@ -632,36 +610,23 @@ function TemplateTeamSelector({
 
 function RuntimeAssignments({
   isPending,
-  onPersonaRuntimeChange,
   onTeamRuntimeChange,
-  personas,
-  personaRuntimes,
   providers,
   providersLoading,
-  selectedPersonaIds,
   selectedTeamIds,
   teamRuntimes,
   teams,
 }: {
   isPending: boolean;
-  onPersonaRuntimeChange: (personaId: string, runtimeId: string) => void;
   onTeamRuntimeChange: (teamId: string, runtimeId: string) => void;
-  personas: AgentPersona[];
-  personaRuntimes: Record<string, string>;
   providers: AcpRuntime[];
   providersLoading: boolean;
-  selectedPersonaIds: readonly string[];
   selectedTeamIds: readonly string[];
   teamRuntimes: Record<string, string>;
   teams: readonly AgentTeam[];
 }) {
-  const hasSelections =
-    selectedPersonaIds.length > 0 || selectedTeamIds.length > 0;
-  if (!hasSelections) return null;
+  if (selectedTeamIds.length === 0) return null;
 
-  const selectedPersonas = personas.filter((p) =>
-    selectedPersonaIds.includes(p.id),
-  );
   const selectedTeams = teams.filter((t) => selectedTeamIds.includes(t.id));
 
   return (
@@ -669,7 +634,7 @@ function RuntimeAssignments({
       <div>
         <div className="text-sm font-medium">Runtimes</div>
         <p className="text-sm font-normal text-muted-foreground">
-          Choose which runtime to use for each agent.
+          Choose which runtime to use for team-pack members.
         </p>
       </div>
 
@@ -681,19 +646,6 @@ function RuntimeAssignments({
         </p>
       ) : (
         <div className="space-y-2">
-          {selectedPersonas.map((persona) => (
-            <RuntimeRow
-              key={persona.id}
-              avatarUrl={persona.avatarUrl}
-              disabled={isPending}
-              label={persona.displayName}
-              onChange={(runtimeId) =>
-                onPersonaRuntimeChange(persona.id, runtimeId)
-              }
-              providers={providers}
-              value={personaRuntimes[persona.id] ?? ""}
-            />
-          ))}
           {selectedTeams.map((team) => (
             <RuntimeRow
               key={team.id}

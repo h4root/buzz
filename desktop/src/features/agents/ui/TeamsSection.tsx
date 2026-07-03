@@ -9,8 +9,8 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
-import type { AgentPersona, AgentTeam } from "@/shared/api/types";
+import { resolveTeamMembers } from "@/features/agents/lib/teamMembers";
+import type { AgentPersona, AgentTeam, ManagedAgent } from "@/shared/api/types";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import {
   DropdownMenu,
@@ -29,6 +29,7 @@ const TEAM_CARD_GRID_CLASS = `${TEAM_CARD_COLUMN_CLASS} grid grid-cols-[repeat(a
 type TeamsSectionProps = {
   teams: AgentTeam[];
   personas: AgentPersona[];
+  agents: ManagedAgent[];
   error: Error | null;
   isLoading: boolean;
   isPending: boolean;
@@ -47,6 +48,7 @@ type TeamsSectionProps = {
 export function TeamsSection({
   teams,
   personas,
+  agents,
   error,
   isLoading,
   isPending,
@@ -96,7 +98,7 @@ export function TeamsSection({
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Teams</h3>
           <p className="text-sm text-secondary-foreground/75">
-            Saved groups from My Agents that you can add to a channel together.
+            Saved groups of agents that you can add to a channel together.
           </p>
         </div>
       </div>
@@ -124,9 +126,9 @@ export function TeamsSection({
       {!isLoading ? (
         <div className={TEAM_CARD_GRID_CLASS}>
           {teams.map((team) => {
-            const resolution = resolveTeamPersonas(team, personas);
-            const missingPersonaCount = resolution.missingPersonaCount;
-            const hasMissingPersonas = resolution.hasMissingPersonas;
+            const resolution = resolveTeamMembers(team, personas, agents);
+            const missingMemberCount = resolution.missingMemberCount;
+            const hasMissingMembers = resolution.hasMissingMembers;
 
             return (
               <TeamIdentityCard
@@ -146,7 +148,7 @@ export function TeamsSection({
                       onCloseAutoFocus={(event) => event.preventDefault()}
                     >
                       <DropdownMenuItem
-                        disabled={isPending || hasMissingPersonas}
+                        disabled={isPending || hasMissingMembers}
                         onClick={() => onAddToChannel(team)}
                       >
                         <Rocket className="h-4 w-4" />
@@ -161,14 +163,14 @@ export function TeamsSection({
                         Edit
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        disabled={isPending || hasMissingPersonas}
+                        disabled={isPending || hasMissingMembers}
                         onClick={() => onDuplicate(team)}
                       >
                         <CopyPlus className="h-4 w-4" />
                         Duplicate
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        disabled={isPending || hasMissingPersonas}
+                        disabled={isPending || hasMissingMembers}
                         onClick={() => onExport(team)}
                       >
                         <Download className="h-4 w-4" />
@@ -208,20 +210,20 @@ export function TeamsSection({
                 description={team.description}
                 isSymlink={team.isSymlink}
                 key={team.id}
-                memberCount={team.personaIds.length}
-                personas={resolution.resolvedPersonas}
+                memberCount={resolution.memberCount}
+                members={resolution.resolvedMembers}
                 sourceDir={team.sourceDir}
                 symlinkTarget={team.symlinkTarget}
                 teamName={team.name}
                 version={team.version}
               >
-                {hasMissingPersonas ? (
+                {hasMissingMembers ? (
                   <p className="border-t border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    {missingPersonaCount} persona
-                    {missingPersonaCount === 1 ? "" : "s"} in this team{" "}
-                    {missingPersonaCount === 1 ? "is" : "are"} no longer in your
-                    My Agents. Edit the team to repair it before deploying or
-                    exporting.
+                    {missingMemberCount} agent
+                    {missingMemberCount === 1 ? "" : "s"} in this team{" "}
+                    {missingMemberCount === 1 ? "is" : "are"} no longer
+                    available on this device. Edit the team to repair it before
+                    deploying or exporting.
                   </p>
                 ) : null}
               </TeamIdentityCard>

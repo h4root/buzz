@@ -8,27 +8,20 @@ import {
 } from "@/features/agent-memory/hooks";
 import {
   type AttachManagedAgentToChannelResult,
-  useAcpRuntimesQuery,
-  useAvailableAcpRuntimes,
-  useCreateManagedAgentMutation,
-  useCreatePersonaMutation,
   useDeleteManagedAgentMutation,
-  useDeletePersonaMutation,
-  useExportPersonaJsonMutation,
+  useExportAgentJsonMutation,
   useManagedAgentLogQuery,
   useRelayAgentsQuery,
   useManagedAgentsQuery,
   usePersonasQuery,
   useSetManagedAgentStartOnAppLaunchMutation,
-  useSetPersonaActiveMutation,
   useStartManagedAgentMutation,
   useStopManagedAgentMutation,
-  useUpdateManagedAgentMutation,
-  useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
 import { AddAgentToChannelDialog } from "@/features/agents/ui/AddAgentToChannelDialog";
 import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
-import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
+import { duplicateAgentDraft } from "@/features/agents/ui/agentDraft";
+import { requestOpenCreateAgent } from "@/features/agents/openCreateAgentEvent";
 import {
   isManagedAgentActive,
   startManagedAgentWithRules,
@@ -37,11 +30,6 @@ import {
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { describeLogFile } from "@/features/agents/ui/agentUi";
 import { EditAgentDialog } from "@/features/agents/ui/EditAgentDialog";
-import {
-  duplicatePersonaDialogState,
-  editPersonaDialogState,
-  type PersonaDialogState,
-} from "@/features/agents/ui/personaDialogState";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useIdentityArchive } from "@/features/identity-archive/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
@@ -65,8 +53,6 @@ import { AgentConfigurationFocusedView } from "@/features/profile/ui/UserProfile
 import { UserProfileAgentSettingsMenuSlot } from "@/features/profile/ui/UserProfileAgentActions";
 import { useProfileAgentDeletion } from "@/features/profile/ui/UserProfilePanelDeletion";
 import { useProfileFieldBuckets } from "@/features/profile/ui/UserProfilePanelFields";
-import { submitProfilePersonaDialog } from "@/features/profile/ui/UserProfilePanelPersonaSubmit";
-import { UserProfilePersonaDialogs } from "@/features/profile/ui/UserProfilePersonaDialogs";
 import {
   deriveProfileChannels,
   type ProfilePanelTab,
@@ -85,14 +71,7 @@ import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { AuxiliaryPanelBody } from "@/shared/layout/AuxiliaryPanel";
 import { cn } from "@/shared/lib/cn";
-import type {
-  AgentPersona,
-  Channel,
-  CreateManagedAgentInput,
-  CreatePersonaInput,
-  ManagedAgent,
-  UpdatePersonaInput,
-} from "@/shared/api/types";
+import type { Channel, ManagedAgent } from "@/shared/api/types";
 import { UserProfilePanelFrame } from "@/features/profile/ui/UserProfilePanelFrame";
 import { getUserProfilePanelHeaderContent } from "@/features/profile/ui/UserProfilePanelHeaderContent";
 export type { ProfilePanelTab, ProfilePanelView };
@@ -109,7 +88,6 @@ export function UserProfilePanel({
   onResizeStart,
   onTabChange,
   onViewChange,
-  persona,
   pubkey,
   splitPaneClamp = false,
   tab: controlledTab,
@@ -148,10 +126,6 @@ export function UserProfilePanel({
   );
   const [editAgentOpen, setEditAgentOpen] = React.useState(false);
   const [addToChannelOpen, setAddToChannelOpen] = React.useState(false);
-  const [personaDialogState, setPersonaDialogState] =
-    React.useState<PersonaDialogState | null>(null);
-  const [personaToDelete, setPersonaToDelete] =
-    React.useState<AgentPersona | null>(null);
 
   const personasQuery = usePersonasQuery();
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: true });
@@ -161,33 +135,17 @@ export function UserProfilePanel({
       const pubkeyLower = pubkey.toLowerCase();
       return agents.find((agent) => agent.pubkey.toLowerCase() === pubkeyLower);
     }
-    if (persona) {
-      return agents.find((agent) => agent.personaId === persona.id);
-    }
     return undefined;
-  }, [managedAgentsQuery.data, persona, pubkey]);
+  }, [managedAgentsQuery.data, pubkey]);
   const resolvedPersonaFromSource = React.useMemo(() => {
-    const personaId = persona?.id ?? managedAgent?.personaId;
-    if (personaId) {
-      const refreshedPersona = personasQuery.data?.find(
-        (candidate) => candidate.id === personaId,
-      );
-      if (refreshedPersona) {
-        return refreshedPersona;
-      }
-    }
-    if (persona) {
-      return persona;
-    }
     if (!managedAgent?.personaId) {
       return undefined;
     }
     return personasQuery.data?.find(
       (candidate) => candidate.id === managedAgent.personaId,
     );
-  }, [managedAgent?.personaId, persona, personasQuery.data]);
-  const profileIdentityKey =
-    pubkey ?? managedAgent?.pubkey ?? `persona:${persona?.id ?? "unknown"}`;
+  }, [managedAgent?.personaId, personasQuery.data]);
+  const profileIdentityKey = pubkey ?? managedAgent?.pubkey ?? "unknown";
   const resolvedPersona = useRetainedPersona(
     resolvedPersonaFromSource,
     profileIdentityKey,
@@ -204,19 +162,11 @@ export function UserProfilePanel({
   }, [effectivePubkey, profileQuery.refetch]);
 
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: true });
-  const availableRuntimesQuery = useAvailableAcpRuntimes();
-  const acpRuntimesQuery = useAcpRuntimesQuery();
-  const createAgentMutation = useCreateManagedAgentMutation();
-  const updateManagedAgentMutation = useUpdateManagedAgentMutation();
   const startAgentMutation = useStartManagedAgentMutation();
   const stopAgentMutation = useStopManagedAgentMutation();
   const deleteAgentMutation = useDeleteManagedAgentMutation();
   const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
-  const createPersonaMutation = useCreatePersonaMutation();
-  const updatePersonaMutation = useUpdatePersonaMutation();
-  const deletePersonaMutation = useDeletePersonaMutation();
-  const setPersonaActiveMutation = useSetPersonaActiveMutation();
-  const exportPersonaJsonMutation = useExportPersonaJsonMutation();
+  const exportAgentJsonMutation = useExportAgentJsonMutation();
   const usersBatchQuery = useUsersBatchQuery(
     effectivePubkey ? [effectivePubkey] : [],
   );
@@ -231,7 +181,7 @@ export function UserProfilePanel({
   const followMutation = useFollowMutation(currentPubkey);
   const unfollowMutation = useUnfollowMutation(currentPubkey);
   const { onOpenAgentSession } = useAgentSession();
-  const { goChannel } = useAppNavigation();
+  const { goAgents, goChannel } = useAppNavigation();
   const profile = resolvePanelProfile({
     managedAgent,
     persona: resolvedPersona,
@@ -261,9 +211,9 @@ export function UserProfilePanel({
   const isBot =
     Boolean(relayAgent || managedAgent || resolvedPersona) || isAgentByOaOwner;
   const managedAgentOwner = useIsManagedAgent(isBot ? effectivePubkey : null);
-  // Does THIS desktop hold the agent's seckey (or is this an editable persona)?
-  // Gates edit (which needs the key) and grants owner access when managed locally.
-  const isOwner = resolvedPersona ? true : managedAgentOwner;
+  // Does THIS desktop hold the agent's seckey? Gates edit (which needs the
+  // key) and grants owner access when managed locally.
+  const isOwner = managedAgentOwner;
   // Is the viewer the agent's declared owner (NIP-OA `ownerPubkey == me`)? This
   // is the right signal for viewing owner-scoped data (activity feed, memory):
   // the relay routes and the client decrypts those frames with the owner's OWN
@@ -310,10 +260,7 @@ export function UserProfilePanel({
   }, [managedAgent, relayAgent, viewerIsOwner]);
   useActiveAgentTurnsBridge(bridgeAgents);
   useManagedAgentObserverBridge(observerBridgeAgents);
-  const canEditAgent =
-    isOwner === true &&
-    (managedAgent !== undefined ||
-      (resolvedPersona !== undefined && !resolvedPersona.isBuiltIn));
+  const canEditAgent = isOwner === true && managedAgent !== undefined;
   const memoryQuery = useAgentMemoryQuery(effectivePubkey, {
     enabled: viewerIsOwner && Boolean(effectivePubkey),
   });
@@ -325,22 +272,12 @@ export function UserProfilePanel({
     viewerIsOwner && Boolean(onOpenAgentSession) && Boolean(effectivePubkey);
   const canOpenAgentLogs =
     isOwner === true && managedAgent?.backend.type === "local";
-  const canInstantiateAgent =
-    isOwner === true &&
-    resolvedPersona !== undefined &&
-    managedAgent === undefined;
   const isAgentActionPending =
-    createAgentMutation.isPending ||
-    updateManagedAgentMutation.isPending ||
     startAgentMutation.isPending ||
     stopAgentMutation.isPending ||
     deleteAgentMutation.isPending ||
     startOnLaunchMutation.isPending ||
-    createPersonaMutation.isPending ||
-    updatePersonaMutation.isPending ||
-    deletePersonaMutation.isPending ||
-    setPersonaActiveMutation.isPending ||
-    exportPersonaJsonMutation.isPending;
+    exportAgentJsonMutation.isPending;
   const isFollowing =
     !isSelf &&
     pubkeyLower.length > 0 &&
@@ -368,8 +305,7 @@ export function UserProfilePanel({
     return map;
   }, [channelsQuery.data]);
 
-  const targetKey =
-    effectivePubkey ?? `persona:${resolvedPersona?.id ?? "unknown"}`;
+  const targetKey = effectivePubkey ?? "unknown";
   const prevTargetKeyRef = React.useRef(targetKey);
   React.useEffect(() => {
     if (prevTargetKeyRef.current === targetKey) return;
@@ -384,69 +320,15 @@ export function UserProfilePanel({
   });
 
   const handleEditAgent = React.useCallback(() => {
-    if (resolvedPersona && !resolvedPersona.isBuiltIn) {
-      setPersonaDialogState(editPersonaDialogState(resolvedPersona));
-      return;
-    }
     setEditAgentOpen(true);
-  }, [resolvedPersona]);
+  }, []);
 
-  const { deleteManagedAgentRecord, deleteManagedAgentsForPersona } =
-    useProfileAgentDeletion({
-      channels: channelsQuery.data,
-      deleteManagedAgent: deleteAgentMutation.mutateAsync,
-      managedAgent,
-      managedAgents: managedAgentsQuery.data,
-      presenceLookup: presenceQuery.data,
-      relayAgents: relayAgentsQuery.data,
-    });
-
-  const createManagedAgentForPersona = React.useCallback(
-    async (personaToStart: AgentPersona) => {
-      const runtimes = availableRuntimesQuery.data ?? [];
-      const defaultRuntime = runtimes[0] ?? null;
-      const { runtime, warnings } = resolvePersonaRuntime(
-        personaToStart.runtime,
-        runtimes,
-        defaultRuntime,
-      );
-
-      for (const warning of warnings) {
-        toast.warning(warning);
-      }
-
-      if (!runtime) {
-        throw new Error("No available runtime found for this agent.");
-      }
-
-      const input: CreateManagedAgentInput = {
-        name: personaToStart.displayName,
-        acpCommand: "buzz-acp",
-        agentCommand: runtime.command,
-        agentArgs: runtime.defaultArgs,
-        mcpCommand: runtime.mcpCommand ?? "",
-        personaId: personaToStart.id,
-        systemPrompt: personaToStart.systemPrompt,
-        avatarUrl: personaToStart.avatarUrl ?? undefined,
-        model: personaToStart.model ?? undefined,
-        envVars: personaToStart.envVars,
-        spawnAfterCreate: true,
-        startOnAppLaunch: true,
-        backend: { type: "local" },
-      };
-
-      const created = await createAgentMutation.mutateAsync(input);
-      void managedAgentsQuery.refetch();
-      void relayAgentsQuery.refetch();
-      return created;
-    },
-    [
-      availableRuntimesQuery.data,
-      createAgentMutation.mutateAsync,
-      managedAgentsQuery.refetch,
-      relayAgentsQuery.refetch,
-    ],
-  );
+  const { deleteManagedAgentRecord } = useProfileAgentDeletion({
+    channels: channelsQuery.data,
+    deleteManagedAgent: deleteAgentMutation.mutateAsync,
+    presenceLookup: presenceQuery.data,
+    relayAgents: relayAgentsQuery.data,
+  });
 
   const handleAgentPrimaryAction = React.useCallback(async () => {
     if (!managedAgent) return;
@@ -484,26 +366,6 @@ export function UserProfilePanel({
     startAgentMutation.mutateAsync,
     stopAgentMutation.mutateAsync,
   ]);
-
-  const handleInstantiateAgent = React.useCallback(async () => {
-    if (!resolvedPersona) return;
-
-    try {
-      const created = await createManagedAgentForPersona(resolvedPersona);
-      if (created.spawnError) {
-        toast.error(created.spawnError);
-      } else {
-        toast.success(`Started ${created.agent.name}.`);
-      }
-      if (created.profileSyncError) {
-        toast.warning(created.profileSyncError);
-      }
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to start agent.",
-      );
-    }
-  }, [createManagedAgentForPersona, resolvedPersona]);
 
   const handleToggleAgentAutoStart = React.useCallback(async () => {
     if (managedAgent?.backend.type !== "local") return;
@@ -543,51 +405,19 @@ export function UserProfilePanel({
     }
   }, [deleteManagedAgentRecord, managedAgent, onClose]);
 
-  const handleSubmitPersona = React.useCallback(
-    async (input: CreatePersonaInput | UpdatePersonaInput) => {
-      await submitProfilePersonaDialog({
-        createManagedAgentForPersona,
-        createPersona: createPersonaMutation.mutateAsync,
-        input,
-        managedAgent,
-        onDone: () => {
-          setPersonaDialogState(null);
-          void personasQuery.refetch();
-        },
-        previousPersona: resolvedPersona,
-        runtimes: acpRuntimesQuery.data ?? [],
-        updateManagedAgent: updateManagedAgentMutation.mutateAsync,
-        updatePersona: updatePersonaMutation.mutateAsync,
-      });
-    },
-    [
-      createPersonaMutation.mutateAsync,
-      createManagedAgentForPersona,
-      managedAgent,
-      personasQuery.refetch,
-      resolvedPersona,
-      acpRuntimesQuery.data,
-      updateManagedAgentMutation.mutateAsync,
-      updatePersonaMutation.mutateAsync,
-    ],
-  );
+  const handleDuplicateAgent = React.useCallback(() => {
+    if (!managedAgent) return;
+    requestOpenCreateAgent(duplicateAgentDraft(managedAgent));
+    onClose();
+    void goAgents();
+  }, [goAgents, managedAgent, onClose]);
 
-  const handleEditPersona = React.useCallback(() => {
-    if (!resolvedPersona || resolvedPersona.isBuiltIn) return;
-    setPersonaDialogState(editPersonaDialogState(resolvedPersona));
-  }, [resolvedPersona]);
-
-  const handleDuplicatePersona = React.useCallback(() => {
-    if (!resolvedPersona) return;
-    setPersonaDialogState(duplicatePersonaDialogState(resolvedPersona));
-  }, [resolvedPersona]);
-
-  const handleExportPersona = React.useCallback(() => {
-    if (!resolvedPersona) return;
-    exportPersonaJsonMutation.mutate(resolvedPersona.id, {
+  const handleExportAgent = React.useCallback(() => {
+    if (!managedAgent) return;
+    exportAgentJsonMutation.mutate(managedAgent.pubkey, {
       onSuccess: (saved) => {
         if (saved) {
-          toast.success(`Exported ${resolvedPersona.displayName}.`);
+          toast.success(`Exported ${managedAgent.name}.`);
         }
       },
       onError: (error) => {
@@ -596,69 +426,7 @@ export function UserProfilePanel({
         );
       },
     });
-  }, [exportPersonaJsonMutation, resolvedPersona]);
-
-  const handleDeletePersona = React.useCallback(async () => {
-    if (!resolvedPersona) return;
-
-    if (resolvedPersona.isBuiltIn) {
-      try {
-        const deletedInstances =
-          await deleteManagedAgentsForPersona(resolvedPersona);
-        if (deletedInstances.cancelled) return;
-
-        await setPersonaActiveMutation.mutateAsync({
-          id: resolvedPersona.id,
-          active: false,
-        });
-        toast.success(`Removed ${resolvedPersona.displayName} from My Agents.`);
-        onClose();
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Failed to delete agent.",
-        );
-      }
-      return;
-    }
-
-    if (resolvedPersona.sourceTeam) {
-      toast.error("This agent is managed by a team.");
-      return;
-    }
-
-    setPersonaToDelete(resolvedPersona);
-  }, [
-    deleteManagedAgentsForPersona,
-    onClose,
-    resolvedPersona,
-    setPersonaActiveMutation.mutateAsync,
-  ]);
-
-  const handleConfirmDeletePersona = React.useCallback(
-    async (personaToConfirm: AgentPersona) => {
-      if (personaToConfirm.sourceTeam) {
-        toast.error("This agent is managed by a team.");
-        setPersonaToDelete(null);
-        return;
-      }
-
-      try {
-        const deletedInstances =
-          await deleteManagedAgentsForPersona(personaToConfirm);
-        if (deletedInstances.cancelled) return;
-
-        await deletePersonaMutation.mutateAsync(personaToConfirm.id);
-        toast.success(`Deleted ${personaToConfirm.displayName}.`);
-        setPersonaToDelete(null);
-        onClose();
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Failed to delete agent.",
-        );
-      }
-    },
-    [deleteManagedAgentsForPersona, deletePersonaMutation.mutateAsync, onClose],
-  );
+  }, [exportAgentJsonMutation, managedAgent]);
 
   const handleAddedToChannel = React.useCallback(
     (channel: Channel, result: AttachManagedAgentToChannelResult) => {
@@ -741,26 +509,19 @@ export function UserProfilePanel({
     managedAgent,
     resolvedPersona,
   );
-  const canManagePersona = isOwner === true && resolvedPersona !== undefined;
-  const canEditPersona =
-    canManagePersona && resolvedPersona?.isBuiltIn !== true;
-  const canDeletePersona = canManagePersona && !resolvedPersona?.sourceTeam;
+  const canManageAgent = isOwner === true && managedAgent !== undefined;
   const archiveActions = useIdentityArchive(effectivePubkey);
   const agentSettingsMenu = (
     <UserProfileAgentSettingsMenuSlot
       archiveActions={archiveActions}
-      canDeletePersona={canDeletePersona}
-      canInstantiateAgent={canInstantiateAgent}
-      canManagePersona={canManagePersona}
+      canManageAgent={canManageAgent}
       isAgentActionPending={isAgentActionPending}
       isBot={isBot}
       managedAgent={managedAgent}
       onDeleteAgent={handleDeleteAgent}
-      onDeletePersona={handleDeletePersona}
-      onDuplicatePersona={handleDuplicatePersona}
-      onExportPersona={handleExportPersona}
+      onDuplicateAgent={handleDuplicateAgent}
+      onExportAgent={handleExportAgent}
       onToggleAutoStart={handleToggleAgentAutoStart}
-      personaActionKey={resolvedPersona?.id}
       viewerIsOwner={viewerIsOwner}
     />
   );
@@ -813,7 +574,6 @@ export function UserProfilePanel({
         <ProfileSummaryView
           canAddToChannel={managedAgent !== undefined && isOwner === true}
           canEditAgent={canEditAgent}
-          canInstantiateAgent={canInstantiateAgent}
           canOpenAgentLogs={canOpenAgentLogs}
           canViewActivity={canViewActivity}
           channelCount={profileChannels.length}
@@ -825,8 +585,6 @@ export function UserProfilePanel({
           agentInstruction={agentInstruction}
           handleAgentPrimaryAction={handleAgentPrimaryAction}
           handleEditAgent={handleEditAgent}
-          handleEditPersona={canEditPersona ? handleEditPersona : undefined}
-          handleInstantiateAgent={handleInstantiateAgent}
           handleMessage={handleMessage}
           isArchived={archiveActions.isArchived === true}
           isMessagePending={isOpeningDm}
@@ -928,36 +686,6 @@ export function UserProfilePanel({
       open={addToChannelOpen}
     />
   ) : null;
-  const personaDialogs = (
-    <UserProfilePersonaDialogs
-      createError={
-        createPersonaMutation.error instanceof Error
-          ? createPersonaMutation.error
-          : null
-      }
-      isPending={
-        createPersonaMutation.isPending ||
-        updatePersonaMutation.isPending ||
-        updateManagedAgentMutation.isPending ||
-        createAgentMutation.isPending
-      }
-      personaDialogState={personaDialogState}
-      personaToDelete={personaToDelete}
-      runtimes={acpRuntimesQuery.data ?? []}
-      runtimesLoading={acpRuntimesQuery.isLoading}
-      updateError={
-        updatePersonaMutation.error instanceof Error
-          ? updatePersonaMutation.error
-          : null
-      }
-      onCloseDelete={() => setPersonaToDelete(null)}
-      onCloseDialog={() => setPersonaDialogState(null)}
-      onConfirmDelete={(selectedPersona) => {
-        void handleConfirmDeletePersona(selectedPersona);
-      }}
-      onSubmit={handleSubmitPersona}
-    />
-  );
   return (
     <UserProfilePanelFrame
       addAgentToChannelDialog={addAgentToChannelDialog}
@@ -971,7 +699,6 @@ export function UserProfilePanel({
       onClose={onClose}
       onResetWidth={onResetWidth}
       onResizeStart={onResizeStart}
-      personaDialogs={personaDialogs}
       profileBody={profileBody}
       splitPaneClamp={splitPaneClamp}
       widthPx={widthPx}

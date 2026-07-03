@@ -74,12 +74,9 @@ export type ProfileSummaryViewProps = {
   channelsLoading: boolean;
   displayName: string;
   followMutation: ReturnType<typeof useFollowMutation>;
-  canInstantiateAgent: boolean;
   agentInstruction: string | null;
   handleAgentPrimaryAction: () => void;
   handleEditAgent: () => void;
-  handleEditPersona?: () => void;
-  handleInstantiateAgent: () => void;
   handleMessage: () => void;
   isArchived: boolean;
   isMessagePending: boolean;
@@ -182,12 +179,9 @@ export function ProfileSummaryView({
   channelsLoading,
   displayName,
   followMutation,
-  canInstantiateAgent,
   agentInstruction,
   handleAgentPrimaryAction,
   handleEditAgent,
-  handleEditPersona,
-  handleInstantiateAgent,
   handleMessage,
   isArchived,
   isMessagePending,
@@ -221,9 +215,7 @@ export function ProfileSummaryView({
   const activeTurns = useActiveAgentTurns(isBot ? pubkey : null);
 
   const showMemoriesTab = isOwner === true && Boolean(pubkey);
-  const showInstructionBlock =
-    isOwner === true &&
-    (agentInstruction !== null || handleEditPersona !== undefined);
+  const showInstructionBlock = isOwner === true && agentInstruction !== null;
   const showChannelsTab =
     channelsLoading || channelCount > 0 || isBot || relayAgent !== undefined;
   const runtimeConfigurationFields = agentSettingsFields.filter((field) =>
@@ -336,14 +328,7 @@ export function ProfileSummaryView({
         userStatus={userStatus}
       />
 
-      {canInstantiateAgent ? (
-        <ProfilePersonaPrimaryActions
-          canEditAgent={canEditAgent}
-          disabled={isAgentActionPending}
-          onEditAgent={handleEditAgent}
-          onStartAgent={handleInstantiateAgent}
-        />
-      ) : !isSelf && pubkey ? (
+      {!isSelf && pubkey ? (
         <ProfilePrimaryActions
           canEditAgent={canEditAgent}
           followMutation={followMutation}
@@ -718,39 +703,6 @@ function ProfilePrimaryActions({
           label={agentActionLabel}
           onClick={onAgentPrimaryAction}
           testId="user-profile-agent-primary-action"
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function ProfilePersonaPrimaryActions({
-  canEditAgent,
-  disabled,
-  onEditAgent,
-  onStartAgent,
-}: {
-  canEditAgent: boolean;
-  disabled: boolean;
-  onEditAgent: () => void;
-  onStartAgent: () => void;
-}) {
-  return (
-    <div className="flex items-center justify-center gap-8">
-      <ProfileQuickAction
-        disabled={disabled}
-        icon={Play}
-        label="Start agent"
-        onClick={onStartAgent}
-        testId="user-profile-start-agent"
-      />
-      {canEditAgent ? (
-        <ProfileQuickAction
-          disabled={disabled}
-          icon={Pencil}
-          label="Edit"
-          onClick={onEditAgent}
-          testId="user-profile-edit-agent"
         />
       ) : null}
     </div>
