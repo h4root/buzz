@@ -10,7 +10,7 @@ Federated Identity Authorization
 
 ## Abstract
 
-This NIP defines how a relay or Nostr-adjacent HTTP service authorizes an already-authenticated Nostr key only when a valid federated identity assertion (an OIDC/JWT credential from an external identity provider) resolves to the same principal. It specifies assertion transport, validation, an identity-to-key binding lifecycle (enroll, conflict, revoke, rotate), session semantics, and failure behavior.
+This NIP defines how a relay or Nostr-adjacent HTTP service authorizes an already-authenticated Nostr key only when a valid federated identity assertion resolves to the same principal and key. It specifies assertion transport, validation, an identity-to-key binding lifecycle (enroll, conflict, revoke, rotate), session semantics, and failure behavior. A separately validated delegation MAY derive narrower authority from a bound owner as described below; that exception does not turn the delegate into the federated principal.
 
 The identity provider never becomes a Nostr signing authority, and the assertion never substitutes for Nostr proof of key control. This NIP is an authorization layer above NIP-42 and NIP-98, not a replacement for either.
 
@@ -38,10 +38,10 @@ Without a standard, each deployment invents an incompatible binding scheme, and 
 
 An assertion reaches the verifier in an HTTP header on the request being authorized: the WebSocket upgrade request for relay connections, or each individual request for NIP-98-authenticated HTTP endpoints. Two transport profiles are defined; a service MUST document which it accepts.
 
-1. **Trusted proxy**: an authenticating reverse proxy (for example oauth2-proxy or an SSO-aware ingress) injects the assertion header after authenticating the user. This profile is conforming only if untrusted clients cannot reach the verifier directly and the proxy strips any inbound copy of the header before setting it. This is the recommended profile for browser-based clients, which cannot attach arbitrary WebSocket upgrade headers.
-2. **Client-attached**: the client sends the assertion itself, in the `Authorization: Bearer` header or a service-configured header.
+1. **Trusted proxy**: an authenticating reverse proxy (for example oauth2-proxy or an SSO-aware ingress) injects the assertion after authenticating the user. The injected header name is deployment configuration. This profile is conforming only if untrusted clients cannot reach the verifier directly and the proxy strips every inbound copy of that header before setting it. This is the recommended profile for browser-based clients, which cannot attach arbitrary WebSocket upgrade headers.
+2. **Client-attached**: the client sends the assertion itself in `Nostr-Federated-Identity: Bearer <JWT>`. A verifier MAY additionally accept another documented header on WebSocket upgrades, including `Authorization: Bearer`; HTTP requests using NIP-98 MUST use `Nostr-Federated-Identity` because their `Authorization` header carries the `Nostr` proof.
 
-The header name is deployment configuration; `Authorization` semantics apply when it is used. A value with a `Bearer ` prefix MUST be accepted with the prefix stripped.
+Assertion acquisition and interactive OIDC login are outside this NIP. A client-attached assertion value MUST use the `Bearer` scheme; after removing that scheme, the value MUST contain exactly one JWT and no comma-separated alternatives.
 
 On a WebSocket connection, the assertion captured at upgrade is evaluated when a key performs NIP-42 AUTH — each authenticating key is authorized against that assertion independently. On HTTP, the assertion and the NIP-98 proof MUST arrive on the same request they authorize.
 
@@ -86,7 +86,7 @@ Authorize(D, i, k_a?, k):
   tofu:          create (i, k); ALLOW
 ```
 
-The check and any insertion MUST be atomic for `(D, i, k)`: under concurrent first use of the same identity or key, at most one binding is created and every other attempt observes it (allow on exact match, deny on conflict). Storage failure or a lost race MUST deny — never fall back to an unchecked allow.
+The check and any insertion MUST be atomic for `(D, i, k)`: under concurrent first use of the same identity or key, at most one binding is created and every other attempt observes it (allow on exact match, deny on conflict). Storage failure or a race whose committed result cannot be read MUST deny — never fall back to an unchecked allow.
 
 ### Enrollment modes
 
@@ -127,7 +127,19 @@ HTTP endpoints respond `401` where `auth-required` applies and `403` where `rest
 
 ## Discovery
 
-A relay SHOULD advertise support in its NIP-11 document under `limitation` as `"federated_identity": true`, and MAY publish a `federated_identity` object naming its accepted transport profile(s), enrollment mode, and whether delegation is honored. It MUST NOT publish issuer-internal detail (tenant URLs, claim names, audiences) that is not already public.
+A relay SHOULD advertise support in its NIP-11 document under `limitation` as `"federated_identity": true`. It MAY additionally include this top-level object:
+
+```json
+{
+  "federated_identity": {
+    "transports": ["trusted-proxy", "client-attached"],
+    "enrollment": "attested-key",
+    "delegation": false
+  }
+}
+```
+
+`transports` contains the supported profile names from this NIP, `enrollment` is exactly one enrollment mode, and `delegation` states whether separately validated delegation may be honored. Unknown fields MUST be ignored. A relay MUST NOT publish issuer-internal detail (tenant URLs, claim names, audiences) that is not already public.
 
 ## Privacy
 
