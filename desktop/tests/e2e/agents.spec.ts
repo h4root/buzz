@@ -155,6 +155,7 @@ test("selecting a template prefills the create agent form", async ({
   await openCreateAgentStart(page);
 
   await page.getByTestId("create-agent-template-builtin:fizz").click();
+  await page.getByTestId("create-agent-start-use-template").click();
 
   await expect(page.getByTestId("agent-name-input")).toHaveValue("Fizz");
   await expect(page.getByTestId("agent-instructions-input")).toHaveValue(
@@ -169,6 +170,7 @@ test("template submit creates an agent card in the grid", async ({ page }) => {
   await openCreateAgentStart(page);
 
   await page.getByTestId("create-agent-template-builtin:fizz").click();
+  await page.getByTestId("create-agent-start-use-template").click();
   await expect(page.getByTestId("agent-name-input")).toHaveValue("Fizz");
   await expect(page.getByTestId("create-agent-submit")).toBeEnabled();
   await page.getByTestId("create-agent-submit").click();
