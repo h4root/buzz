@@ -103,7 +103,7 @@ Authorize(D, i, k_a?, k):
       ALLOW(created)
 ```
 
-If an insertion loses a race or storage is unavailable, deny; never fall back to an unchecked allow. The check and possible insertion must be linearizable for `(D, i, k)`.
+If a concurrent attempt finds the identical committed binding, it allows as `existing`; if the committed outcome cannot be read or storage is unavailable, deny — never fall back to an unchecked allow. The check and possible insertion must be linearizable for `(D, i, k)`.
 
 The resulting authorization lease is:
 

@@ -102,7 +102,7 @@ Within a domain, active bindings form a partial bijection: an identity has at mo
 
 For HTTP requests, the decision applies to that request only.
 
-For a NIP-42 WebSocket connection, the relay MAY cache the decision as a lease. A lease MUST NOT be honored past the assertion's `exp` (implementations MAY enforce a shorter maximum). At expiry the relay MUST require a fresh assertion, reject protected operations, or close the connection. When a relay learns a binding was revoked, it MUST invalidate matching leases; a relay that detects revocation by polling MUST NOT claim immediate revocation and SHOULD document its detection latency.
+For a NIP-42 WebSocket connection, the relay MAY cache the decision as a lease. A lease MUST NOT be honored past the assertion's `exp` (implementations MAY enforce a shorter maximum). At expiry the relay MUST reject protected operations or close the connection; a fresh assertion arrives only on a new connection's upgrade request. When a relay learns a binding was revoked, it MUST invalidate matching leases; a relay that detects revocation by polling MUST NOT claim immediate revocation and SHOULD document its detection latency.
 
 When multiple keys authenticate on one connection (NIP-42 permits this), authorization is tracked per key. A lease for one key MUST NOT authorize operations attributed to another.
 
