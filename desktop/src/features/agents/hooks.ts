@@ -372,6 +372,9 @@ export function useDeletePersonaMutation() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: personasQueryKey }),
         queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+        // Saved templates in the New Agent catalog are persona records —
+        // deleting one must drop it from the catalog immediately.
+        queryClient.invalidateQueries({ queryKey: agentTemplatesQueryKey }),
       ]);
     },
   });

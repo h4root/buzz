@@ -1,11 +1,24 @@
-import { FileUp, Plus } from "lucide-react";
+import { FileUp, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import { useAgentTemplatesQuery } from "@/features/agents/hooks";
+import {
+  useAgentTemplatesQuery,
+  useDeletePersonaMutation,
+} from "@/features/agents/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentTemplate } from "@/shared/api/types";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import { cn } from "@/shared/lib/cn";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { ChooserDialogContent } from "@/shared/ui/chooser-dialog-content";
 import { Dialog } from "@/shared/ui/dialog";
@@ -66,6 +79,10 @@ export function CreateAgentStartDialog({
   const [selectedTemplateId, setSelectedTemplateId] = React.useState<
     string | null
   >(null);
+  const [templateToDelete, setTemplateToDelete] =
+    React.useState<AgentTemplate | null>(null);
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const deletePersonaMutation = useDeletePersonaMutation();
   const selectedTemplate = React.useMemo(() => {
     if (templates.length === 0) {
       return null;
@@ -85,6 +102,8 @@ export function CreateAgentStartDialog({
 
   React.useEffect(() => {
     if (!open) {
+      setDeleteError(null);
+      setTemplateToDelete(null);
       return;
     }
 
@@ -106,6 +125,28 @@ export function CreateAgentStartDialog({
     }
 
     onPickTemplate(selectedTemplate);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!templateToDelete) {
+      return;
+    }
+
+    setDeleteError(null);
+    try {
+      // Saved templates are persona records; deleting the record removes
+      // the template. Backend validation rejects deletion while a team
+      // still references the record, surfaced via deleteError below.
+      await deletePersonaMutation.mutateAsync(templateToDelete.id);
+      // The selection effect reselects templates[0] once the deleted id
+      // drops out of the refetched list.
+      setTemplateToDelete(null);
+    } catch (error) {
+      setTemplateToDelete(null);
+      setDeleteError(
+        error instanceof Error ? error.message : "Failed to delete template.",
+      );
+    }
   };
 
   return (
@@ -240,9 +281,36 @@ export function CreateAgentStartDialog({
                   {error.message}
                 </p>
               ) : null}
+
+              {deleteError ? (
+                <p
+                  className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                  data-testid="create-agent-start-delete-error"
+                >
+                  {deleteError}
+                </p>
+              ) : null}
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end bg-linear-to-t from-background via-background/95 to-transparent px-5 pb-4 pt-12">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end gap-2 bg-linear-to-t from-background via-background/95 to-transparent px-5 pb-4 pt-12">
+              {selectedTemplate?.source === "saved" ? (
+                <Button
+                  aria-label={`Delete the ${selectedTemplate.displayName} template`}
+                  className="pointer-events-auto"
+                  data-testid="create-agent-start-delete-template"
+                  disabled={deletePersonaMutation.isPending}
+                  onClick={() => {
+                    setDeleteError(null);
+                    setTemplateToDelete(selectedTemplate);
+                  }}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </Button>
+              ) : null}
               <Button
                 aria-label={
                   selectedTemplate
@@ -270,6 +338,45 @@ export function CreateAgentStartDialog({
           type="file"
         />
       </ChooserDialogContent>
+
+      <AlertDialog
+        onOpenChange={(dialogOpen) => {
+          if (!dialogOpen) {
+            setTemplateToDelete(null);
+          }
+        }}
+        open={templateToDelete !== null}
+      >
+        <AlertDialogContent data-testid="create-agent-start-delete-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete template?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {templateToDelete
+                ? `Delete "${templateToDelete.displayName}". Agents created from it are not affected, but this saved template will be removed from all your devices.`
+                : "Delete this saved template."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </AlertDialogCancel>
+            <AlertDialogAction asChild>
+              <Button
+                data-testid="create-agent-start-delete-confirm"
+                onClick={() => {
+                  void handleConfirmDelete();
+                }}
+                type="button"
+                variant="destructive"
+              >
+                Delete
+              </Button>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
