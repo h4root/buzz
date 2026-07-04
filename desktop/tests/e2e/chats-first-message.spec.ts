@@ -141,15 +141,23 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
     )
     .toBeGreaterThanOrEqual(-1);
 
-  // Agent-authored PR links render the prominent agent-work card variant
-  // twice: inline in the message and in the top-right work panel (which
-  // also shows the PR's source branch).
+  // Agent-authored PR links render the prominent agent-work card inline in
+  // the message; the top-right work panel shows the standard rich card plus
+  // the PR's source branch.
   await expect(
     page.locator("[data-link-preview='github-pull-request-agent']"),
-  ).toHaveCount(2, { timeout: 10_000 });
-  await expect(page.getByTestId("chat-work-panel")).toBeVisible();
-  await expect(page.getByTestId("chat-work-panel")).toContainText(
-    "kennylopez-chatmode",
-  );
+  ).toHaveCount(1, { timeout: 10_000 });
+  const workPanel = page.getByTestId("chat-work-panel");
+  await expect(workPanel).toBeVisible();
+  await expect(workPanel).toContainText("kennylopez-chatmode");
+  await expect(
+    workPanel.locator("[data-link-preview='github-pull-request']"),
+  ).toBeVisible();
+
+  // The header's PR button toggles the panel.
+  await page.getByTestId("toggle-work-panel").click();
+  await expect(workPanel).not.toBeVisible();
+  await page.getByTestId("toggle-work-panel").click();
+  await expect(workPanel).toBeVisible();
   await page.screenshot({ path: "test-results/agent-pr-card.png" });
 });

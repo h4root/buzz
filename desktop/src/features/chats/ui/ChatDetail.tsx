@@ -47,7 +47,6 @@ import type {
 } from "@/shared/api/types";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
-import { extractSupportedLinkPreviews } from "@/shared/lib/linkPreview";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   MessageScroller,
@@ -88,7 +87,11 @@ type ChatDetailProps = {
   profiles?: UserProfileLookup;
   projects: ChatProject[];
   shareAction?: React.ReactNode;
+  /** Show the top-right work module for this PR (toggled from the header). */
+  showWorkPanel?: boolean;
   templates: ChannelTemplate[];
+  /** Latest PR link the chat's agent posted, if any. */
+  workPanelHref?: string | null;
 };
 
 export function ChatDetail({
@@ -106,7 +109,9 @@ export function ChatDetail({
   profiles,
   projects,
   shareAction,
+  showWorkPanel = true,
   templates,
+  workPanelHref = null,
 }: ChatDetailProps) {
   const queryClient = useQueryClient();
   const updateMetadataMutation = useUpdateChatMetadataMutation();
@@ -248,28 +253,6 @@ export function ChatDetail({
     [chatActivity.hiddenAgentMessageIds, defaultAgent?.pubkey, messages],
   );
   const hasTranscriptActivity = chatActivity.totalBlockCount > 0;
-
-  // The latest PR link the agent posted in this chat drives the top-right
-  // work module (branch + live PR card).
-  const agentPullRequestHref = React.useMemo(() => {
-    if (!defaultAgent?.pubkey) {
-      return null;
-    }
-    const agentKey = normalizePubkey(defaultAgent.pubkey);
-    for (let index = messages.length - 1; index >= 0; index--) {
-      const message = messages[index];
-      if (normalizePubkey(message.pubkey) !== agentKey) {
-        continue;
-      }
-      const preview = extractSupportedLinkPreviews(message.content).find(
-        (candidate) => candidate.kind === "github-pull-request",
-      );
-      if (preview) {
-        return preview.href;
-      }
-    }
-    return null;
-  }, [defaultAgent?.pubkey, messages]);
 
   // Solo chats (you + one agent) read as a plain stream: agent rows drop
   // their avatar and name. Identities come back as soon as another agent or
@@ -641,8 +624,8 @@ export function ChatDetail({
             />
           </div>
         </div>
-        {agentPullRequestHref ? (
-          <ChatWorkPanel prHref={agentPullRequestHref} />
+        {workPanelHref && showWorkPanel ? (
+          <ChatWorkPanel prHref={workPanelHref} />
         ) : null}
       </div>
     </>

@@ -5,7 +5,7 @@ import {
   useGithubPullRequestQuery,
 } from "@/shared/lib/githubPullRequest";
 import { parseSupportedLinkPreview } from "@/shared/lib/linkPreview";
-import { AgentPullRequestCard } from "@/shared/ui/link-preview-attachment";
+import { GithubPullRequestCard } from "@/shared/ui/link-preview-attachment";
 
 /**
  * Right-hand work module for a chat whose agent produced a pull request:
@@ -36,7 +36,7 @@ export function ChatWorkPanel({ prHref }: { prHref: string }) {
           <span className="min-w-0 truncate font-mono">{branch}</span>
         </div>
       ) : null}
-      <AgentPullRequestCard preview={preview} />
+      <GithubPullRequestCard className="w-full" preview={preview} />
     </aside>
   );
 }

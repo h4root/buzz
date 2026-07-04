@@ -50,6 +50,8 @@ type ChatHeaderActionsProps = {
   defaultAgentPubkey?: string | null;
   messages: RelayEvent[];
   metadata: ChatMetadata | null;
+  /** Rendered between Share and the settings menu (work panel toggle). */
+  workPanelToggle?: React.ReactNode;
 };
 
 export function ChatHeaderActions({
@@ -57,6 +59,7 @@ export function ChatHeaderActions({
   defaultAgentPubkey,
   messages,
   metadata,
+  workPanelToggle,
 }: ChatHeaderActionsProps) {
   const [isCanvasOpen, setIsCanvasOpen] = React.useState(false);
   const [isDefaultAgentOpen, setIsDefaultAgentOpen] = React.useState(false);
@@ -81,6 +84,7 @@ export function ChatHeaderActions({
         messages={messages}
         metadata={metadata}
       />
+      {workPanelToggle}
       <ChatSettingsMenu
         onOpenCanvas={() => setIsCanvasOpen(true)}
         onOpenDefaultAgent={() => setIsDefaultAgentOpen(true)}
