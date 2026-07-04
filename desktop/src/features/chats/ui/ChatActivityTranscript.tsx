@@ -544,7 +544,7 @@ function CompletedWorkMarker({ items }: { items: TranscriptItem[] }) {
           onClick={() => setIsOpen((current) => !current)}
           type="button"
         >
-          <span className="flex min-w-0 items-center gap-1.5 text-foreground">
+          <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             <span className="truncate text-sm font-medium">{label}</span>
             <ChevronDown
               className={cn(
@@ -701,7 +701,7 @@ function ActivityPreviewLine({ item }: { item: TranscriptItem }) {
           {toolLabel(item)}
         </span>
         {summary.preview && summary.kind !== "shell" ? (
-          <span className="min-w-0 truncate text-foreground/80">
+          <span className="min-w-0 truncate text-muted-foreground/80">
             {summary.preview}
           </span>
         ) : null}

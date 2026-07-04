@@ -19,12 +19,8 @@ import {
 } from "@/features/messages/lib/imetaMediaMarkdown";
 
 import { useAttachmentEditing } from "@/features/messages/lib/useAttachmentEditing";
-import {
-  type MediaUploadController,
-  useMediaUpload,
-} from "@/features/messages/lib/useMediaUpload";
+import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
-import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import {
   hasMentionClipboardHtml,
   normalizeMentionClipboardHtml,
@@ -40,7 +36,6 @@ import { useComposerSpoilerParticles } from "@/features/messages/lib/useComposer
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { getBuzzCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
-import type { ChannelType } from "@/shared/api/types";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerReplyEditBanner } from "./ComposerReplyEditBanner";
 import { ComposerAttachments, DropZoneOverlay } from "./ComposerAttachments";
@@ -54,79 +49,7 @@ import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
 import { useMentionSendFlow } from "./useMentionSendFlow";
 import { useComposerContentState } from "./useComposerContentState";
 import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
-
-type MessageComposerProps = {
-  autoInviteNonMemberMentions?: boolean;
-  channelId?: string | null;
-  channelName: string;
-  channelType?: ChannelType | null;
-  containerClassName?: string;
-  disabled?: boolean;
-  draftKey?: string;
-  editTarget?: {
-    author: string;
-    body: string;
-    id: string;
-    /**
-     * NIP-92 imeta attachments on the original event, in tag order. Loaded
-     * into the composer's pending-imeta state on edit-open so the user sees
-     * them as removable thumbnails (just like the send path) and can add
-     * more. The submit path emits a fresh full imeta tag set on the edit
-     * event; the receiver overlays it.
-     */
-    imetaMedia?: ImetaMedia[];
-  } | null;
-  isSending?: boolean;
-  mediaController?: MediaUploadController;
-  onCancelEdit?: () => void;
-  onCancelReply?: () => void;
-  /**
-   * Invoked when the user presses ↑ in an empty composer that is not already
-   * in edit mode. The owner should locate the most recent message authored by
-   * the current user within this composer's scope (main timeline, DM, or
-   * thread) and enter edit mode for it. Return `true` if a target was found
-   * and edit mode was entered, so the composer can swallow the keystroke;
-   * return `false` to let the arrow key fall through normally.
-   */
-  onEditLastOwnMessage?: () => boolean;
-  onEditSave?: (content: string, mediaTags?: string[][]) => Promise<void>;
-  /**
-   * Called synchronously at the start of `submitMessage`, before any awaits,
-   * to capture context that must be stable throughout the async send pipeline.
-   * Used by the thread-reply composer to capture the current reply target before
-   * the mention-flow awaits can change navigation state.
-   */
-  onCaptureSendContext?: () => {
-    parentEventId: string | null;
-    threadHeadId: string | null;
-  } | null;
-  onSend: (
-    content: string,
-    mentionPubkeys: string[],
-    mediaTags?: string[][],
-    channelId?: string | null,
-    threadContext?: {
-      parentEventId: string | null;
-      threadHeadId: string | null;
-    } | null,
-  ) => Promise<void>;
-  placeholder?: string;
-  profiles?: UserProfileLookup;
-  replyTarget?: {
-    author: string;
-    body: string;
-    id: string;
-  } | null;
-  showTopBorder?: boolean;
-  toolbarControls?: {
-    emoji?: boolean;
-    formatting?: boolean;
-    spoiler?: boolean;
-  };
-  toolbarExtraActions?: React.ReactNode;
-  typingParentEventId?: string | null;
-  typingRootEventId?: string | null;
-};
+import type { MessageComposerProps } from "./messageComposerProps";
 
 function MessageComposerImpl({
   autoInviteNonMemberMentions = false,
@@ -144,6 +67,7 @@ function MessageComposerImpl({
   onEditLastOwnMessage,
   onEditSave,
   onSend,
+  onStopAgent = null,
   placeholder,
   profiles,
   replyTarget = null,
@@ -230,29 +154,6 @@ function MessageComposerImpl({
   const internalMedia = useMediaUpload();
   const media = mediaController ?? internalMedia;
   const ownsDropZone = mediaController === undefined;
-
-  // Draft-persist lifecycle: restore/clear content + imeta + spoilered urls on
-  // key change, and persist the outgoing draft in the cleanup. The StrictMode
-  // fix lives inside this hook — see useDraftPersistSnapshot.ts.
-  useDraftPersistLifecycle({
-    effectiveDraftKey,
-    channelId,
-    loadDraft: drafts.loadDraft,
-    persistDraft: drafts.persistDraft,
-    livePendingImeta: media.pendingImeta,
-    setPendingImeta: media.setPendingImeta,
-    setContent: (content) => {
-      setComposerContent(content);
-      richText.setContent(content);
-    },
-    clearContent: () => {
-      setComposerContent("");
-      richText.clearContent();
-    },
-    setSpoileredAttachmentUrls,
-    spoileredAttachmentUrlsRef,
-    syncComposerContentFromEditor,
-  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
   React.useEffect(() => {
@@ -356,6 +257,29 @@ function MessageComposerImpl({
   onEditLinkRef.current = linkEditor.openFromClick;
   onLinkSelectionChangeRef.current = linkEditor.showFromCursor;
   useComposerSpoilerParticles(richText.editor, composerScrollRef);
+
+  // Draft-persist lifecycle: restore/clear content + imeta + spoilered urls on
+  // key change, and persist the outgoing draft in the cleanup. The StrictMode
+  // fix lives inside this hook — see useDraftPersistSnapshot.ts.
+  useDraftPersistLifecycle({
+    effectiveDraftKey,
+    channelId,
+    loadDraft: drafts.loadDraft,
+    persistDraft: drafts.persistDraft,
+    livePendingImeta: media.pendingImeta,
+    setPendingImeta: media.setPendingImeta,
+    setContent: (content) => {
+      setComposerContent(content);
+      richText.setContent(content);
+    },
+    clearContent: () => {
+      setComposerContent("");
+      richText.clearContent();
+    },
+    setSpoileredAttachmentUrls,
+    spoileredAttachmentUrlsRef,
+    syncComposerContentFromEditor,
+  });
 
   const mentionSendFlow = useMentionSendFlow({
     channelId,
@@ -996,6 +920,7 @@ function MessageComposerImpl({
               onLinkButton={linkEditor.openFromToolbar}
               onOpenMentionPicker={openMentionPicker}
               onPaperclip={handlePaperclipClick}
+              onStopAgent={onStopAgent}
               sendDisabled={sendDisabled}
               showEmojiPicker={showEmojiControls}
               showFormatting={showFormattingControls}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  deriveBranchFromAgentMessages,
   deriveChatWorkBranch,
   parseBranchFromCommand,
 } from "./chatWorkBranch.ts";
@@ -90,4 +91,53 @@ test("deriveChatWorkBranch returns the latest branch across the transcript", () 
 
 test("deriveChatWorkBranch is null without branch activity", () => {
   assert.equal(deriveChatWorkBranch([toolItem("pnpm test")]), null);
+});
+
+const AGENT_PK = "cd".repeat(32);
+
+test("agent messages announcing a worktree branch are parsed", () => {
+  const messages = [
+    { pubkey: "ff".repeat(32), content: "please make a worktree" },
+    {
+      pubkey: AGENT_PK,
+      content:
+        "Done! Created a new worktree at /Users/k/Development/sprout-dictation " +
+        "on branch kennylopez-dictation, based off latest main.",
+    },
+  ];
+  assert.equal(
+    deriveBranchFromAgentMessages(messages, AGENT_PK),
+    "kennylopez-dictation",
+  );
+});
+
+test("backticked branch names and quoted commands in messages parse too", () => {
+  assert.equal(
+    deriveBranchFromAgentMessages(
+      [{ pubkey: AGENT_PK, content: "I pushed the branch `fix/panel-width`." }],
+      AGENT_PK,
+    ),
+    "fix/panel-width",
+  );
+  assert.equal(
+    deriveBranchFromAgentMessages(
+      [{ pubkey: AGENT_PK, content: "Ran `git checkout -b quick-fix` first." }],
+      AGENT_PK,
+    ),
+    "quick-fix",
+  );
+});
+
+test("non-agent messages and branchless text derive nothing", () => {
+  assert.equal(
+    deriveBranchFromAgentMessages(
+      [
+        { pubkey: "ff".repeat(32), content: "on branch user-branch" },
+        { pubkey: AGENT_PK, content: "All tests pass now." },
+      ],
+      AGENT_PK,
+    ),
+    null,
+  );
+  assert.equal(deriveBranchFromAgentMessages([], null), null);
 });

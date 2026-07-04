@@ -8903,6 +8903,23 @@ export function maybeInstallE2eTauriMocks() {
         };
       case "fetch_github_pr_comment_state":
         return { openThreads: 2 };
+      case "build_observer_control_event": {
+        // Specs assert the invocation (via __BUZZ_E2E_COMMANDS__); the event
+        // itself only needs to be publishable over the mock websocket.
+        const controlPayload = payload as { agentPubkey?: string };
+        return JSON.stringify({
+          id: "c0".repeat(32),
+          pubkey: "ab".repeat(32),
+          created_at: Math.floor(Date.now() / 1_000),
+          kind: 24200,
+          tags: [
+            ["frame", "control"],
+            ["agent", controlPayload.agentPubkey ?? ""],
+          ],
+          content: "",
+          sig: "00".repeat(64),
+        });
+      }
       case "fetch_github_pull_request": {
         // Deterministic PR details so the rich GitHub card renders in mocks.
         const prPayload = payload as { number?: number };

@@ -28,6 +28,57 @@ export function deriveChatWorkBranch(
   return branch;
 }
 
+/**
+ * Fallback when tool activity predates the observer subscription (frames are
+ * ephemeral): the agent's persisted chat messages usually announce the
+ * branch — "Created a new worktree at … on branch kennylopez-dictation".
+ * Parses "on branch <name>" / "branch `<name>`" phrasing plus any quoted git
+ * commands in the text; the last mention across the messages wins.
+ */
+export function deriveBranchFromAgentMessages(
+  messages: readonly { pubkey: string; content: string }[],
+  agentPubkey: string | null | undefined,
+): string | null {
+  if (!agentPubkey) {
+    return null;
+  }
+  let branch: string | null = null;
+  for (const message of messages) {
+    if (message.pubkey !== agentPubkey) {
+      continue;
+    }
+    const parsed =
+      parseBranchFromCommand(message.content) ??
+      parseBranchFromProse(message.content);
+    if (parsed) {
+      branch = parsed;
+    }
+  }
+  return branch;
+}
+
+const PROSE_BRANCH_PATTERNS = [
+  /\bon (?:the )?branch\s+[`'"]?([A-Za-z0-9._/-]+?)[`'".,)]*(?:\s|$)/i,
+  /\bbranch\s+[`'"]([A-Za-z0-9._/-]+)[`'"]/i,
+];
+
+function parseBranchFromProse(text: string): string | null {
+  let branch: string | null = null;
+  for (const pattern of PROSE_BRANCH_PATTERNS) {
+    const flags = pattern.flags.includes("g")
+      ? pattern.flags
+      : `${pattern.flags}g`;
+    const global = new RegExp(pattern.source, flags);
+    for (const match of text.matchAll(global)) {
+      const candidate = match[1];
+      if (candidate && !looksLikeSha(candidate)) {
+        branch = candidate;
+      }
+    }
+  }
+  return branch;
+}
+
 /** Latest branch named by any segment of a (possibly compound) command. */
 export function parseBranchFromCommand(command: string): string | null {
   let branch: string | null = null;
@@ -119,6 +170,6 @@ function looksLikeSha(token: string): boolean {
 function tokenize(segment: string): string[] {
   return segment
     .split(/\s+/)
-    .map((token) => token.replace(/^['"]|['"]$/g, ""))
+    .map((token) => token.replace(/^[`'"]+|[`'".,]+$/g, ""))
     .filter((token) => token.length > 0);
 }

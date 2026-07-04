@@ -7,6 +7,7 @@ import {
   AtSign,
   HatGlasses,
   Paperclip,
+  Square,
   X,
 } from "lucide-react";
 
@@ -45,6 +46,7 @@ export const MessageComposerToolbar = React.memo(
     onLinkButton,
     onOpenMentionPicker,
     onPaperclip,
+    onStopAgent,
     sendDisabled,
     showEmojiPicker,
     showFormatting,
@@ -66,6 +68,12 @@ export const MessageComposerToolbar = React.memo(
     onLinkButton: () => void;
     onOpenMentionPicker: () => void;
     onPaperclip: () => void;
+    /**
+     * When set, the send slot renders a stop button that interrupts the
+     * channel's working agent (send stays reachable while a user message is
+     * in flight — `isSending` wins).
+     */
+    onStopAgent?: (() => void) | null;
     sendDisabled: boolean;
     showEmojiPicker?: boolean;
     showFormatting?: boolean;
@@ -311,23 +319,36 @@ export const MessageComposerToolbar = React.memo(
 
         <div className="flex items-center gap-2">
           {extraActions}
-          <Button
-            aria-label={isSending ? "Sending" : "Send message"}
-            className="rounded-full"
-            data-testid="send-message"
-            disabled={sendDisabled || isSending}
-            size="icon"
-            type="submit"
-          >
-            {isSending ? (
-              <span
-                aria-hidden
-                className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
-              />
-            ) : (
-              <ArrowUp aria-hidden />
-            )}
-          </Button>
+          {onStopAgent && !isSending ? (
+            <Button
+              aria-label="Stop agent"
+              className="rounded-full"
+              data-testid="stop-agent"
+              onClick={onStopAgent}
+              size="icon"
+              type="button"
+            >
+              <Square aria-hidden className="h-3.5 w-3.5 fill-current" />
+            </Button>
+          ) : (
+            <Button
+              aria-label={isSending ? "Sending" : "Send message"}
+              className="rounded-full"
+              data-testid="send-message"
+              disabled={sendDisabled || isSending}
+              size="icon"
+              type="submit"
+            >
+              {isSending ? (
+                <span
+                  aria-hidden
+                  className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
+                />
+              ) : (
+                <ArrowUp aria-hidden />
+              )}
+            </Button>
+          )}
         </div>
       </div>
     );

@@ -26,7 +26,11 @@ import {
   NO_PROJECT_SELECTION_ID,
 } from "@/features/chats/lib/chatSetup";
 import { ChatActivityTranscript } from "@/features/chats/ui/ChatActivityTranscript";
-import { deriveChatWorkBranch } from "@/features/chats/lib/chatWorkBranch";
+import {
+  deriveBranchFromAgentMessages,
+  deriveChatWorkBranch,
+} from "@/features/chats/lib/chatWorkBranch";
+import { cancelManagedAgentTurn } from "@/shared/api/agentControl";
 import { ChatWorkPanel } from "@/features/chats/ui/ChatWorkPanel";
 import { isHumanFacingAssistantText } from "@/features/chats/ui/chatActivityText";
 import { entranceClassForCreatedAt } from "@/features/chats/ui/messageEntrance";
@@ -147,10 +151,26 @@ export function ChatDetail({
   );
   // Branch the agent is on, straight from its worktree/checkout commands —
   // the work panel shows it live, before any PR exists to report head.ref.
+  // Tool activity only exists from subscription time (observer frames are
+  // ephemeral), so fall back to the agent's persisted messages, which
+  // announce the branch ("…on branch kennylopez-dictation").
   const workBranch = React.useMemo(
-    () => deriveChatWorkBranch(scopedTranscript),
-    [scopedTranscript],
+    () =>
+      deriveChatWorkBranch(scopedTranscript) ??
+      deriveBranchFromAgentMessages(messages, defaultAgent?.pubkey),
+    [defaultAgent?.pubkey, messages, scopedTranscript],
   );
+  const handleStopAgent = React.useCallback(() => {
+    if (!defaultAgent?.pubkey) {
+      return;
+    }
+    cancelManagedAgentTurn(defaultAgent.pubkey, chat.id).catch(
+      (error: unknown) => {
+        console.error("Failed to stop agent turn", error);
+        toast.error("Could not stop the agent");
+      },
+    );
+  }, [chat.id, defaultAgent?.pubkey]);
   const selectedProject = React.useMemo(
     () => chatProjectForMetadata(metadata),
     [metadata],
@@ -611,6 +631,7 @@ export function ChatDetail({
               draftKey={`chat:${chat.id}`}
               isSending={isSending}
               onSend={onSend}
+              onStopAgent={isChatTurnActive ? handleStopAgent : null}
               placeholder="Message Fizz..."
               profiles={profiles}
               toolbarControls={{

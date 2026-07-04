@@ -198,21 +198,31 @@ test("sidebar chat title shimmers while the agent has an active turn", async ({
   );
   await expect(shimmerTitle).toHaveCount(0);
 
-  // Seed an active turn for this chat — the row title must pick up the
-  // accent shimmer (class + animated overlay), same store the working row
-  // reads.
+  // While no turn is active the composer offers plain send.
+  await expect(page.getByTestId("send-message")).toBeVisible();
+  await expect(page.getByTestId("stop-agent")).toHaveCount(0);
+
+  // Seed an active turn for this chat's agent — the row title must pick up
+  // the accent shimmer (class + animated overlay), same store the working
+  // row reads, and the composer's send button must become a stop button.
   await page.evaluate(
-    ({ channelId }) => {
-      (
-        window as Window & {
-          __BUZZ_E2E_SEED_ACTIVE_TURNS__?: (input: {
-            agentPubkey: string;
-            channelId: string;
-            turnId: string;
-          }) => void;
-        }
-      ).__BUZZ_E2E_SEED_ACTIVE_TURNS__?.({
-        agentPubkey: "ab".repeat(32),
+    async ({ channelId }) => {
+      const win = window as Window & {
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+          command: string,
+          payload?: unknown,
+        ) => Promise<unknown>;
+        __BUZZ_E2E_SEED_ACTIVE_TURNS__?: (input: {
+          agentPubkey: string;
+          channelId: string;
+          turnId: string;
+        }) => void;
+      };
+      const agents = (await win.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+        "list_managed_agents",
+      )) as Array<{ pubkey: string }>;
+      win.__BUZZ_E2E_SEED_ACTIVE_TURNS__?.({
+        agentPubkey: agents[0]?.pubkey ?? "ab".repeat(32),
         channelId,
         turnId: "turn-shimmer-1",
       });
@@ -228,4 +238,20 @@ test("sidebar chat title shimmers while the agent has an active turn", async ({
       (element) => window.getComputedStyle(element, "::before").animationName,
     ),
   ).toBe("buzz-shimmer");
+
+  // Send became stop; clicking it sends the cancel-turn control frame.
+  const stopButton = page.getByTestId("stop-agent");
+  await expect(stopButton).toBeVisible();
+  await expect(page.getByTestId("send-message")).toHaveCount(0);
+  await stopButton.click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
+            .__BUZZ_E2E_COMMANDS__ ?? []
+        ).includes("build_observer_control_event"),
+      ),
+    )
+    .toBe(true);
 });
