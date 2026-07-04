@@ -46,4 +46,16 @@ test("switching chats does not stack headers", async ({ page }) => {
     fullPage: false,
   });
   expect(headerCount).toBe(1);
+
+  // Leaving the Chats tab and returning restores the last-viewed chat
+  // instead of defaulting to the new-chat screen.
+  const lastChatId = page.url().split("/chats/")[1];
+  expect(lastChatId).toBeTruthy();
+  await page.getByTestId("open-agents-view").click();
+  await expect(page).toHaveURL(/agents/);
+  await page.getByTestId("open-chats-view").click();
+  await expect(page).toHaveURL(new RegExp(`/chats/${lastChatId}`));
+  await expect(page.getByTestId("chat-title")).toContainText(
+    "Second chat about bananas",
+  );
 });

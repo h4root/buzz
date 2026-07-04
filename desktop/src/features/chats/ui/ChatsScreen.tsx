@@ -236,6 +236,59 @@ export function ChatsScreen({
     selectedChatId !== null
       ? (chats.find((chat) => chat.id === selectedChatId) ?? null)
       : null;
+
+  // Remember the last-viewed chat per workspace so returning to the Chats
+  // tab lands there instead of the new-chat screen. Explicit new-chat
+  // navigations carry a projectId in the route search (initialProjectId is
+  // then non-undefined) and are never redirected.
+  const lastChatStorageKey = activeWorkspace?.id
+    ? `buzz:chats:last-viewed:${activeWorkspace.id}`
+    : null;
+  React.useEffect(() => {
+    if (!lastChatStorageKey || !selectedChat) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(lastChatStorageKey, selectedChat.id);
+    } catch {
+      // Storage unavailable — restore is best-effort.
+    }
+  }, [lastChatStorageKey, selectedChat]);
+  const attemptedChatRestoreRef = React.useRef(false);
+  React.useEffect(() => {
+    if (selectedChatId !== null) {
+      // Viewing a chat re-arms the restore for the next plain visit.
+      attemptedChatRestoreRef.current = false;
+      return;
+    }
+    if (
+      initialProjectId !== undefined ||
+      chatsQuery.isLoading ||
+      attemptedChatRestoreRef.current
+    ) {
+      return;
+    }
+    attemptedChatRestoreRef.current = true;
+    let storedChatId: string | null = null;
+    try {
+      storedChatId = lastChatStorageKey
+        ? window.localStorage.getItem(lastChatStorageKey)
+        : null;
+    } catch {
+      storedChatId = null;
+    }
+    if (storedChatId && chats.some((chat) => chat.id === storedChatId)) {
+      void goChat(storedChatId, { replace: true });
+    }
+  }, [
+    chats,
+    chatsQuery.isLoading,
+    goChat,
+    initialProjectId,
+    lastChatStorageKey,
+    selectedChatId,
+  ]);
+
   const metadataQuery = useChatMetadataQuery(selectedChat?.id);
   const metadata = metadataQuery.data ?? null;
   const managedAgentsQuery = useManagedAgentsQuery();
