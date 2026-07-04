@@ -195,10 +195,22 @@
   }
 }
 
+/* Accent variant: keeps the text at its normal color and sweeps a
+   primary-colored band across it, for places (sidebar titles) where the
+   default dimmed-base treatment reads as a de-emphasized row. */
+.buzz-shimmer-accent {
+  --buzz-shimmer-highlight: hsl(var(--primary));
+  color: inherit;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .buzz-shimmer,
   .shimmer {
     color: hsl(var(--muted-foreground));
+  }
+
+  .buzz-shimmer-accent {
+    color: inherit;
   }
 
   .buzz-shimmer::before,

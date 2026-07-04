@@ -10,7 +10,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/shared/ui/context-menu";
-import { Shimmer } from "@/shared/ui/Shimmer";
 
 export function ChatListHeader() {
   return (
@@ -83,8 +82,17 @@ export function ChatListItem({
         onClick={() => onSelectChat(chat.id)}
         type="button"
       >
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {isAgentRunning ? <Shimmer>{name}</Shimmer> : name}
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate font-medium",
+            // Shimmer class + overlay live on the truncating span itself
+            // (same pattern as MarkerLabel) so long names keep their
+            // ellipsis while the band sweeps the visible text.
+            isAgentRunning && "buzz-shimmer buzz-shimmer-accent",
+          )}
+          data-shimmer-text={isAgentRunning ? name : undefined}
+        >
+          {name}
         </span>
         {isPinned ? (
           <Pin
@@ -99,7 +107,9 @@ export function ChatListItem({
         ) : null}
       </button>
       {onArchiveChat ? (
-        <div className="relative flex h-6 w-6 shrink-0 items-center justify-center">
+        // Zero-width until hover/focus so the title gets the full row; the
+        // slot expands to make room for the archive button on demand.
+        <div className="relative flex h-6 w-0 shrink-0 items-center justify-center overflow-hidden transition-[width] duration-150 group-focus-within/chat-row:w-6 group-hover/chat-row:w-6">
           <Button
             aria-label={`Archive ${name}`}
             className={cn(
