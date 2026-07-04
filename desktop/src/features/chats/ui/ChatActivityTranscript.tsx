@@ -93,6 +93,7 @@ export function ChatActivityTranscript({
   blocks,
   identityPubkey,
   profiles,
+  showAgentIdentity = true,
 }: {
   /** Turn ids currently live in this channel — drives per-turn rendering. */
   activeTurnIds?: ReadonlySet<string>;
@@ -100,6 +101,8 @@ export function ChatActivityTranscript({
   blocks: ChatActivityRenderBlock[];
   identityPubkey?: string;
   profiles?: UserProfileLookup;
+  /** Hidden in solo chats so agent replies read as part of the stream. */
+  showAgentIdentity?: boolean;
 }) {
   if (blocks.length === 0) {
     return null;
@@ -118,6 +121,7 @@ export function ChatActivityTranscript({
           }
           key={renderBlock.id}
           profiles={profiles}
+          showAgentIdentity={showAgentIdentity}
           suppressPromptMessage={renderBlock.suppressPromptMessage}
         />
       ))}
@@ -131,6 +135,7 @@ function ChatActivityBlockView({
   identityPubkey,
   isTurnActive,
   profiles,
+  showAgentIdentity,
   suppressPromptMessage,
 }: {
   agent: ManagedAgent | null;
@@ -139,6 +144,7 @@ function ChatActivityBlockView({
   /** Whether THIS block's turn is live (per-turn, never channel-wide). */
   isTurnActive: boolean;
   profiles?: UserProfileLookup;
+  showAgentIdentity: boolean;
   suppressPromptMessage: boolean;
 }) {
   if (block.kind === "single") {
@@ -148,6 +154,7 @@ function ChatActivityBlockView({
         identityPubkey={identityPubkey}
         item={block.item}
         profiles={profiles}
+        showAgentIdentity={showAgentIdentity}
         suppressPromptMessage={suppressPromptMessage}
       />
     );
@@ -160,6 +167,7 @@ function ChatActivityBlockView({
         block={block}
         identityPubkey={identityPubkey}
         profiles={profiles}
+        showAgentIdentity={showAgentIdentity}
         suppressPromptMessage={suppressPromptMessage}
       />
     );
@@ -174,6 +182,7 @@ function ChatActivityBlockView({
           key={getSegmentKey(block.turnId, segment)}
           profiles={profiles}
           segment={segment}
+          showAgentIdentity={showAgentIdentity}
           suppressPromptMessage={suppressPromptMessage}
         />
       ))}
@@ -194,12 +203,14 @@ function CompletedTurnView({
   block,
   identityPubkey,
   profiles,
+  showAgentIdentity,
   suppressPromptMessage,
 }: {
   agent: ManagedAgent | null;
   block: Extract<TranscriptDisplayBlock, { kind: "turn" }>;
   identityPubkey?: string;
   profiles?: UserProfileLookup;
+  showAgentIdentity: boolean;
   suppressPromptMessage: boolean;
 }) {
   const promptSegments = block.segments.filter(
@@ -232,6 +243,7 @@ function CompletedTurnView({
           item={item}
           key={item.id}
           profiles={profiles}
+          showAgentIdentity={showAgentIdentity}
         />
       ))}
     </div>
@@ -256,12 +268,14 @@ function ChatActivitySegmentView({
   identityPubkey,
   profiles,
   segment,
+  showAgentIdentity,
   suppressPromptMessage,
 }: {
   agent: ManagedAgent | null;
   identityPubkey?: string;
   profiles?: UserProfileLookup;
   segment: TranscriptTurnSegment;
+  showAgentIdentity: boolean;
   suppressPromptMessage: boolean;
 }) {
   if (segment.kind === "prompt") {
@@ -306,6 +320,7 @@ function ChatActivitySegmentView({
       identityPubkey={identityPubkey}
       item={segment.item}
       profiles={profiles}
+      showAgentIdentity={showAgentIdentity}
       suppressPromptMessage={suppressPromptMessage}
     />
   );
@@ -316,12 +331,14 @@ function ChatActivityItemView({
   identityPubkey,
   item,
   profiles,
+  showAgentIdentity,
   suppressPromptMessage,
 }: {
   agent: ManagedAgent | null;
   identityPubkey?: string;
   item: TranscriptItem;
   profiles?: UserProfileLookup;
+  showAgentIdentity: boolean;
   suppressPromptMessage: boolean;
 }) {
   if (item.type === "message") {
@@ -338,6 +355,7 @@ function ChatActivityItemView({
         identityPubkey={identityPubkey}
         item={item}
         profiles={profiles}
+        showAgentIdentity={showAgentIdentity}
       />
     );
   }
@@ -418,11 +436,13 @@ function ChatTranscriptMessageRow({
   identityPubkey,
   item,
   profiles,
+  showAgentIdentity = true,
 }: {
   agent: ManagedAgent | null;
   identityPubkey?: string;
   item: Extract<TranscriptItem, { type: "message" }>;
   profiles?: UserProfileLookup;
+  showAgentIdentity?: boolean;
 }) {
   const isUser = item.role === "user";
   const pubkey = isUser
@@ -447,20 +467,26 @@ function ChatTranscriptMessageRow({
   const displayText = cleanChatMessageText(item);
   const entrance = hasRecentEntrance(item.timestamp);
 
+  const hideIdentity = !isUser && !showAgentIdentity;
+
   return (
     <Message
       className={cn(entrance && "buzz-message-entrance")}
       side={isUser ? "right" : "left"}
     >
-      {!isUser ? (
+      {!isUser && !hideIdentity ? (
         <MessageAvatar>
           <UserAvatar avatarUrl={avatarUrl} displayName={label} size="sm" />
         </MessageAvatar>
       ) : null}
       <MessageContent className={isUser ? "items-end" : "w-full max-w-full"}>
-        <MessageHeader className={isUser ? "justify-end" : undefined}>
-          <span className="truncate font-medium">{isUser ? "You" : label}</span>
-        </MessageHeader>
+        {!hideIdentity ? (
+          <MessageHeader className={isUser ? "justify-end" : undefined}>
+            <span className="truncate font-medium">
+              {isUser ? "You" : label}
+            </span>
+          </MessageHeader>
+        ) : null}
         {isUser ? (
           <Bubble side="right">
             <Markdown

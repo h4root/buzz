@@ -1,9 +1,16 @@
-import { Archive } from "lucide-react";
+import { Archive, Pencil, Pin, PinOff } from "lucide-react";
 
 import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
-import { Spinner } from "@/shared/ui/spinner";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/shared/ui/context-menu";
+import { Shimmer } from "@/shared/ui/Shimmer";
 
 export function ChatListHeader() {
   return (
@@ -17,25 +24,34 @@ export function ChatListHeader() {
 }
 
 export function ChatListItem({
+  canRename = true,
   chat,
   displayName,
   getChannelReadAt,
   isAgentRunning = false,
   isArchiving = false,
+  isPinned = false,
   onArchiveChat,
+  onRenameChat,
   onSelectChat,
+  onTogglePin,
   selectedChatId,
   unreadChannelCounts,
   unreadChannelIds,
 }: {
+  /** Renaming writes owner metadata — disabled for shared chats. */
+  canRename?: boolean;
   chat: Channel;
   /** Preferred label (chat metadata title); falls back to the channel name. */
   displayName?: string | null;
   getChannelReadAt: (channelId: string) => number | null;
   isAgentRunning?: boolean;
   isArchiving?: boolean;
+  isPinned?: boolean;
   onArchiveChat?: (chatId: string) => void;
+  onRenameChat?: (chatId: string) => void;
   onSelectChat: (chatId: string) => void;
+  onTogglePin?: (chatId: string) => void;
   selectedChatId: string | null;
   unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
@@ -53,7 +69,7 @@ export function ChatListItem({
 
   const isSelected = selectedChatId === chat.id;
 
-  return (
+  const row = (
     <div
       className={cn(
         "group/chat-row flex h-8 w-full min-w-0 items-center gap-1 rounded-md px-1 text-sm transition-colors",
@@ -67,49 +83,82 @@ export function ChatListItem({
         onClick={() => onSelectChat(chat.id)}
         type="button"
       >
-        <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {isAgentRunning ? <Shimmer>{name}</Shimmer> : name}
+        </span>
+        {isPinned ? (
+          <Pin
+            aria-hidden="true"
+            className="h-3 w-3 shrink-0 text-muted-foreground/70"
+          />
+        ) : null}
         {hasUnread ? (
           <span className="shrink-0 rounded-full bg-primary/15 px-1.5 text-2xs font-semibold text-primary">
             {unreadCount > 0 ? Math.min(unreadCount, 99) : ""}
           </span>
         ) : null}
       </button>
-      {isAgentRunning || onArchiveChat ? (
+      {onArchiveChat ? (
         <div className="relative flex h-6 w-6 shrink-0 items-center justify-center">
-          {isAgentRunning ? (
-            <Spinner
-              aria-label={`Agent is running in ${name}`}
-              className={cn(
-                "h-3.5 w-3.5 border-2 transition-opacity",
-                isSelected
-                  ? "text-secondary-foreground/70"
-                  : "text-muted-foreground",
-                onArchiveChat &&
-                  "group-focus-within/chat-row:opacity-0 group-hover/chat-row:opacity-0",
-              )}
-            />
-          ) : null}
-          {onArchiveChat ? (
-            <Button
-              aria-label={`Archive ${name}`}
-              className={cn(
-                "absolute inset-0 h-6 w-6 bg-transparent text-muted-foreground opacity-0 shadow-none transition-[background-color,color,opacity] hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:opacity-100 group-focus-within/chat-row:opacity-100 group-hover/chat-row:opacity-100",
-                isSelected
-                  ? "hover:bg-secondary-foreground/10 focus-visible:bg-secondary-foreground/10"
-                  : "hover:bg-muted focus-visible:bg-muted",
-              )}
-              disabled={isArchiving}
-              onClick={() => onArchiveChat(chat.id)}
-              size="icon-xs"
-              title="Archive chat"
-              type="button"
-              variant="ghost"
-            >
-              <Archive className="h-3.5 w-3.5" />
-            </Button>
-          ) : null}
+          <Button
+            aria-label={`Archive ${name}`}
+            className={cn(
+              "absolute inset-0 h-6 w-6 bg-transparent text-muted-foreground opacity-0 shadow-none transition-[background-color,color,opacity] hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:opacity-100 group-focus-within/chat-row:opacity-100 group-hover/chat-row:opacity-100",
+              isSelected
+                ? "hover:bg-secondary-foreground/10 focus-visible:bg-secondary-foreground/10"
+                : "hover:bg-muted focus-visible:bg-muted",
+            )}
+            disabled={isArchiving}
+            onClick={() => onArchiveChat(chat.id)}
+            size="icon-xs"
+            title="Archive chat"
+            type="button"
+            variant="ghost"
+          >
+            <Archive className="h-3.5 w-3.5" />
+          </Button>
         </div>
       ) : null}
     </div>
+  );
+
+  if (!onRenameChat && !onTogglePin && !onArchiveChat) {
+    return row;
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        {onRenameChat && canRename ? (
+          <ContextMenuItem onSelect={() => onRenameChat(chat.id)}>
+            <Pencil className="h-3.5 w-3.5" />
+            Rename chat
+          </ContextMenuItem>
+        ) : null}
+        {onTogglePin ? (
+          <ContextMenuItem onSelect={() => onTogglePin(chat.id)}>
+            {isPinned ? (
+              <PinOff className="h-3.5 w-3.5" />
+            ) : (
+              <Pin className="h-3.5 w-3.5" />
+            )}
+            {isPinned ? "Unpin chat" : "Pin chat"}
+          </ContextMenuItem>
+        ) : null}
+        {onArchiveChat ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              disabled={isArchiving}
+              onSelect={() => onArchiveChat(chat.id)}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              Archive chat
+            </ContextMenuItem>
+          </>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

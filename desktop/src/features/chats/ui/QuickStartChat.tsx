@@ -3,9 +3,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   ChevronDown,
-  Folder,
-  FolderPlus,
-  FolderX,
+  Notebook,
+  NotebookPen,
+  NotepadTextDashed,
   Search,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -393,7 +393,7 @@ export function ProjectPicker({
       <Popover onOpenChange={setOpen} open={open}>
         <PopoverTrigger asChild>
           <SetupPill className="max-w-64" testId="chat-project-picker">
-            <Folder className="h-4 w-4 shrink-0" />
+            <Notebook className="h-4 w-4 shrink-0" />
             <span className="truncate">
               {selectedProject?.name ||
                 (isNoProjectSelected ? "No project" : "Project")}
@@ -433,7 +433,7 @@ export function ProjectPicker({
           </div>
           <div className="my-2 border-t border-border/60" />
           <ProjectModeRow
-            icon={<FolderPlus className="h-4 w-4" />}
+            icon={<NotebookPen className="h-4 w-4" />}
             label="New project"
             onSelect={() => {
               setIsCreateOpen(true);
@@ -442,7 +442,7 @@ export function ProjectPicker({
           />
           <ProjectModeRow
             checked={isNoProjectSelected}
-            icon={<FolderX className="h-4 w-4" />}
+            icon={<NotepadTextDashed className="h-4 w-4" />}
             label="No project"
             onSelect={() => {
               onSelectProject(NO_PROJECT_SELECTION_ID);
@@ -479,7 +479,7 @@ function ProjectPickerRow({
       onClick={onSelect}
       type="button"
     >
-      <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <Notebook className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{project.name}</span>
         {project.path ? (

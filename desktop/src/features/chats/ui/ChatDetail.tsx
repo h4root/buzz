@@ -247,6 +247,27 @@ export function ChatDetail({
   );
   const hasTranscriptActivity = chatActivity.totalBlockCount > 0;
 
+  // Solo chats (you + one agent) read as a plain stream: agent rows drop
+  // their avatar and name. Identities come back as soon as another agent or
+  // person participates, so multi-party chats stay attributable.
+  const showAgentIdentity = React.useMemo(() => {
+    const others = new Set<string>();
+    for (const message of messages) {
+      if (message.kind === KIND_SYSTEM_MESSAGE) {
+        continue;
+      }
+      const pubkey = normalizePubkey(message.pubkey);
+      if (identityPubkey && pubkey === normalizePubkey(identityPubkey)) {
+        continue;
+      }
+      others.add(pubkey);
+    }
+    if (defaultAgent?.pubkey) {
+      others.add(normalizePubkey(defaultAgent.pubkey));
+    }
+    return others.size > 1;
+  }, [defaultAgent?.pubkey, identityPubkey, messages]);
+
   // Auto-title: upgrade a still-default title (the first message, verbatim)
   // to a succinct subject line. Prefers the agent-generated `chat_title`
   // observer frame — the harness titles the conversation with a real model —
@@ -507,6 +528,7 @@ export function ChatDetail({
                               isAgent={isAgentMessage}
                               isOwn={isOwnMessage}
                               profiles={profiles}
+                              showAgentIdentity={showAgentIdentity}
                             />
                           )}
                         </MessageScrollerItem>
@@ -519,6 +541,7 @@ export function ChatDetail({
                               blocks={activityBlocks}
                               identityPubkey={identityPubkey}
                               activeTurnIds={activeTurnIds}
+                              showAgentIdentity={showAgentIdentity}
                               profiles={profiles}
                             />
                           </MessageScrollerItem>
@@ -546,6 +569,7 @@ export function ChatDetail({
                         identityPubkey={identityPubkey}
                         activeTurnIds={activeTurnIds}
                         profiles={profiles}
+                        showAgentIdentity={showAgentIdentity}
                       />
                     </MessageScrollerItem>
                   ) : null}

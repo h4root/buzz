@@ -36,12 +36,19 @@ export function ChatMessageRow({
   isAgent,
   isOwn,
   profiles,
+  showAgentIdentity = true,
 }: {
   event: RelayEvent;
   isAgent: boolean;
   isOwn: boolean;
   profiles?: UserProfileLookup;
+  /**
+   * Solo chats (one human, one agent) hide the agent's avatar/name so its
+   * replies read as part of the stream.
+   */
+  showAgentIdentity?: boolean;
 }) {
+  const hideIdentity = isAgent && !showAgentIdentity;
   const displayName = profileName(
     event.pubkey,
     profiles,
@@ -54,7 +61,7 @@ export function ChatMessageRow({
 
   return (
     <Message side={isOwn ? "right" : "left"}>
-      {!isOwn ? (
+      {!isOwn && !hideIdentity ? (
         <MessageAvatar>
           <UserAvatar
             avatarUrl={profile?.avatarUrl ?? null}
@@ -66,11 +73,13 @@ export function ChatMessageRow({
       <MessageContent
         className={cn(isOwn && "items-end", isAgent && "w-full max-w-full")}
       >
-        <MessageHeader className={isOwn ? "justify-end" : undefined}>
-          <span className="truncate font-medium">
-            {isOwn ? "You" : displayName}
-          </span>
-        </MessageHeader>
+        {!hideIdentity ? (
+          <MessageHeader className={isOwn ? "justify-end" : undefined}>
+            <span className="truncate font-medium">
+              {isOwn ? "You" : displayName}
+            </span>
+          </MessageHeader>
+        ) : null}
         {isAgent ? (
           <Markdown
             agentAuthored

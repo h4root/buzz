@@ -58,4 +58,29 @@ test("switching chats does not stack headers", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toContainText(
     "Second chat about bananas",
   );
+
+  // Right-click offers rename/pin/archive; pinning moves the chat to the top
+  // of its section.
+  await first.click({ button: "right" });
+  await expect(
+    page.getByRole("menuitem", { name: "Rename chat" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Archive chat" }),
+  ).toBeVisible();
+  await page.getByRole("menuitem", { name: "Pin chat" }).click();
+  const chatNames = page
+    .getByRole("button", { name: /chat about/ })
+    .filter({ hasNotText: "Archive" });
+  await expect(chatNames.first()).toHaveText(/First chat about apples/);
+
+  // Rename through the context menu updates the sidebar and header.
+  await first.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename chat" }).click();
+  const renameInput = page.getByLabel("Chat name");
+  await renameInput.fill("Apple planning");
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await expect(
+    page.getByRole("button", { exact: true, name: "Apple planning" }),
+  ).toBeVisible();
 });

@@ -5,8 +5,8 @@ import { toast } from "sonner";
 import {
   ChevronDown,
   ChevronRight,
-  Folder,
   MoreVertical,
+  Notebook,
   Plus,
 } from "lucide-react";
 
@@ -27,6 +27,10 @@ import {
 } from "@/features/chats/hooks";
 import { buildChatProjects } from "@/features/chats/lib/chatProjects";
 import {
+  toggleStoredChatPin,
+  useStoredChatPins,
+} from "@/features/chats/lib/chatPinStorage";
+import {
   mergeChatProjects,
   upsertStoredChatProject,
   useStoredChatProjects,
@@ -42,6 +46,7 @@ import { ChatListHeader, ChatListItem } from "@/features/chats/ui/ChatListItem";
 import { ChatListSectionHeader } from "@/features/chats/ui/ChatListSectionHeader";
 import { ChatListSkeleton } from "@/features/chats/ui/ChatListSkeleton";
 import { ChatProjectDialog } from "@/features/chats/ui/ChatProjectDialog";
+import { ChatRenameDialog } from "@/features/chats/ui/ChatRenameDialog";
 import { QuickStartChat } from "@/features/chats/ui/QuickStartChat";
 import {
   useChannelMessagesQuery,
@@ -355,6 +360,56 @@ export function ChatsScreen({
   );
 
   const updateMetadataMutation = useUpdateChatMetadataMutation();
+  const pinnedChatIds = useStoredChatPins(activeWorkspace?.id);
+  const handleTogglePin = React.useCallback(
+    (chatId: string) => {
+      toggleStoredChatPin(activeWorkspace?.id, chatId);
+    },
+    [activeWorkspace?.id],
+  );
+  const [renamingChatId, setRenamingChatId] = React.useState<string | null>(
+    null,
+  );
+  const renamingChat =
+    renamingChatId !== null
+      ? (chats.find((chat) => chat.id === renamingChatId) ?? null)
+      : null;
+  const renamingMetadata = renamingChatId
+    ? (metadataByChatId.get(renamingChatId) ?? null)
+    : null;
+  const handleRenameChat = React.useCallback(
+    async (title: string) => {
+      if (!renamingChat) {
+        return;
+      }
+      const metadata = metadataByChatId.get(renamingChat.id) ?? null;
+      try {
+        await updateMetadataMutation.mutateAsync({
+          channelId: renamingChat.id,
+          title,
+          defaultAgentPubkey: metadata?.defaultAgentPubkey ?? undefined,
+          templateId: metadata?.templateId ?? undefined,
+          projectId: metadata?.projectId ?? undefined,
+          projectName: metadata?.projectName ?? undefined,
+          projectPath: metadata?.projectPath ?? undefined,
+          projectTemplateId: metadata?.projectTemplateId ?? undefined,
+          source: metadata?.sourceChannelId
+            ? {
+                channelId: metadata.sourceChannelId,
+                eventId: metadata.sourceEventId ?? undefined,
+                threadRootId: metadata.sourceThreadRootId ?? undefined,
+              }
+            : undefined,
+        });
+        setRenamingChatId(null);
+      } catch (error) {
+        toast.error("Could not rename chat", {
+          description: error instanceof Error ? error.message : undefined,
+        });
+      }
+    },
+    [metadataByChatId, renamingChat, updateMetadataMutation],
+  );
   const ensuredChatIdsRef = React.useRef(new Set<string>());
   React.useEffect(() => {
     if (!selectedChat || metadataQuery.isLoading) {
@@ -515,6 +570,9 @@ export function ChatsScreen({
           identityPubkey={identityPubkey}
           isLoading={chatsQuery.isLoading || metadataListQuery.isLoading}
           metadataByChatId={metadataByChatId}
+          onRenameChat={setRenamingChatId}
+          onTogglePin={handleTogglePin}
+          pinnedChatIds={pinnedChatIds}
           onCreateChat={() => void goChats({ projectId: null })}
           onCreateProjectChat={(projectId) =>
             void goChats({ projectId, replace: true })
@@ -580,6 +638,19 @@ export function ChatsScreen({
           />
         )}
       </main>
+      <ChatRenameDialog
+        currentTitle={
+          renamingMetadata?.title?.trim() || renamingChat?.name || ""
+        }
+        isSaving={updateMetadataMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRenamingChatId(null);
+          }
+        }}
+        onRename={(title) => void handleRenameChat(title)}
+        open={renamingChat !== null}
+      />
     </div>
   );
 }
@@ -594,8 +665,11 @@ function ChatList({
   onArchiveChat,
   onCreateChat,
   onCreateProjectChat,
+  onRenameChat,
   onSelectChat,
+  onTogglePin,
   onUpdateProject,
+  pinnedChatIds,
   projects,
   readStateVersion: _readStateVersion,
   selectedChatId,
@@ -612,7 +686,10 @@ function ChatList({
   onArchiveChat: (chatId: string) => void;
   onCreateChat: () => void;
   onCreateProjectChat: (projectId: string) => void;
+  onRenameChat: (chatId: string) => void;
   onSelectChat: (chatId: string) => void;
+  onTogglePin: (chatId: string) => void;
+  pinnedChatIds: ReadonlySet<string>;
   onUpdateProject: (
     project: ReturnType<typeof buildChatProjects>[number],
   ) => void;
@@ -655,8 +732,23 @@ function ChatList({
         unprojected.push(chat);
       }
     }
-    return { groups, shared, unprojected };
-  }, [chats, identityPubkey, metadataByChatId, projects]);
+    const pinnedFirst = (list: Channel[]) =>
+      [...list].sort(
+        (left, right) =>
+          Number(pinnedChatIds.has(right.id)) -
+          Number(pinnedChatIds.has(left.id)),
+      );
+    return {
+      groups: new Map(
+        [...groups.entries()].map(([projectId, group]) => [
+          projectId,
+          pinnedFirst(group),
+        ]),
+      ),
+      shared: pinnedFirst(shared),
+      unprojected: pinnedFirst(unprojected),
+    };
+  }, [chats, identityPubkey, metadataByChatId, pinnedChatIds, projects]);
 
   const toggleProject = React.useCallback((projectId: string) => {
     setCollapsedProjectIds((current) => {
@@ -695,7 +787,7 @@ function ChatList({
             return (
               <div key={project.id} className="mb-1">
                 <div className="group/project flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground">
-                  <Folder className="h-3.5 w-3.5 shrink-0" />
+                  <Notebook className="h-3.5 w-3.5 shrink-0" />
                   <button
                     className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                     onClick={() => toggleProject(project.id)}
@@ -749,9 +841,12 @@ function ChatList({
                           getChannelReadAt={getChannelReadAt}
                           isAgentRunning={activeChatIds.has(chat.id)}
                           isArchiving={archivingChatId === chat.id}
+                          isPinned={pinnedChatIds.has(chat.id)}
                           key={chat.id}
                           onArchiveChat={onArchiveChat}
+                          onRenameChat={onRenameChat}
                           onSelectChat={onSelectChat}
+                          onTogglePin={onTogglePin}
                           selectedChatId={selectedChatId}
                           unreadChannelCounts={unreadChannelCounts}
                           unreadChannelIds={unreadChannelIds}
@@ -782,9 +877,12 @@ function ChatList({
                 getChannelReadAt={getChannelReadAt}
                 isAgentRunning={activeChatIds.has(chat.id)}
                 isArchiving={archivingChatId === chat.id}
+                isPinned={pinnedChatIds.has(chat.id)}
                 key={chat.id}
                 onArchiveChat={onArchiveChat}
+                onRenameChat={onRenameChat}
                 onSelectChat={onSelectChat}
+                onTogglePin={onTogglePin}
                 selectedChatId={selectedChatId}
                 unreadChannelCounts={unreadChannelCounts}
                 unreadChannelIds={unreadChannelIds}
@@ -801,14 +899,18 @@ function ChatList({
             <ChatListSectionHeader label="Shared" />
             {chatsByProject.shared.map((chat) => (
               <ChatListItem
+                canRename={false}
                 chat={chat}
                 displayName={metadataByChatId.get(chat.id)?.title}
                 getChannelReadAt={getChannelReadAt}
                 isAgentRunning={activeChatIds.has(chat.id)}
                 isArchiving={archivingChatId === chat.id}
+                isPinned={pinnedChatIds.has(chat.id)}
                 key={chat.id}
                 onArchiveChat={onArchiveChat}
+                onRenameChat={onRenameChat}
                 onSelectChat={onSelectChat}
+                onTogglePin={onTogglePin}
                 selectedChatId={selectedChatId}
                 unreadChannelCounts={unreadChannelCounts}
                 unreadChannelIds={unreadChannelIds}
