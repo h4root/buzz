@@ -98,6 +98,7 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
           channelName: string;
           content: string;
           createdAt?: number;
+          mentionPubkeys?: string[];
           pubkey?: string;
         }) => unknown;
       };
@@ -117,9 +118,29 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
         createdAt: base + 2,
         pubkey: pubkey ?? undefined,
       });
+      // A human message with a mention tag: @bob must render as a chip
+      // (alice's pubkey is a mock profile fixture; bob's resolves via the
+      // message's p tag).
+      win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "Hello Fizz, first message",
+        content: "Loop in @bob for the review.",
+        createdAt: base + 4,
+        mentionPubkeys: [
+          "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
+        ],
+        pubkey:
+          "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+      });
     },
     { pubkey: fizzPubkey },
   );
+
+  // Mentions in chat messages render as chips, same as channels.
+  await expect(
+    page.getByLabel("Chat messages").locator("[data-mention]", {
+      hasText: "bob",
+    }),
+  ).toBeVisible({ timeout: 10_000 });
 
   await expect(
     page.getByRole("heading", { name: "First message" }),

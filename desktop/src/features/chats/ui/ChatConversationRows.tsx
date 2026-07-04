@@ -5,6 +5,10 @@ import { cleanAssistantMessageText } from "@/features/chats/ui/chatActivityText"
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { RelayEvent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import {
+  resolveMentionNames,
+  resolveMentionPubkeysByName,
+} from "@/shared/lib/resolveMentionNames";
 import { Bubble } from "@/shared/ui/bubble";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
@@ -58,6 +62,28 @@ export function ChatMessageRow({
   const content = isAgent
     ? cleanAssistantMessageText(event.content)
     : event.content;
+  // @mentions render as chips, resolved from the message's p/mention tags —
+  // same treatment as channel messages, split into people vs agent chips.
+  const mentionNames = React.useMemo(
+    () => resolveMentionNames(event.tags, profiles),
+    [event.tags, profiles],
+  );
+  const mentionPubkeysByName = React.useMemo(
+    () => resolveMentionPubkeysByName(event.tags, profiles),
+    [event.tags, profiles],
+  );
+  const agentMentionPubkeysByName = React.useMemo(() => {
+    if (!mentionPubkeysByName) {
+      return undefined;
+    }
+    const values: Record<string, string> = {};
+    for (const [name, pubkey] of Object.entries(mentionPubkeysByName)) {
+      if (profiles?.[pubkey.toLowerCase()]?.isAgent) {
+        values[name] = pubkey;
+      }
+    }
+    return Object.keys(values).length > 0 ? values : undefined;
+  }, [mentionPubkeysByName, profiles]);
 
   return (
     <Message side={isOwn ? "right" : "left"}>
@@ -84,12 +110,16 @@ export function ChatMessageRow({
         {isAgent ? (
           <Markdown
             agentAuthored
+            agentMentionPubkeysByName={agentMentionPubkeysByName}
             className="w-full max-w-none text-sm leading-6"
             content={content || " "}
+            mentionNames={mentionNames}
+            mentionPubkeysByName={mentionPubkeysByName}
           />
         ) : (
           <Bubble side={isOwn ? "right" : "left"}>
             <Markdown
+              agentMentionPubkeysByName={agentMentionPubkeysByName}
               className={cn(
                 "min-w-0",
                 isOwn &&
@@ -97,6 +127,8 @@ export function ChatMessageRow({
               )}
               compact
               content={content || " "}
+              mentionNames={mentionNames}
+              mentionPubkeysByName={mentionPubkeysByName}
             />
           </Bubble>
         )}

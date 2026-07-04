@@ -52,6 +52,7 @@ import { addChannelMembers, getCanvas, setCanvas } from "@/shared/api/tauri";
 import { extractSupportedLinkPreviews } from "@/shared/lib/linkPreview";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { getMentionTagPubkey } from "@/shared/lib/resolveMentionNames";
 import { Button } from "@/shared/ui/button";
 
 type ChatsScreenProps = {
@@ -293,6 +294,15 @@ export function ChatsScreen({
           identityQuery.data?.pubkey,
           defaultAgent?.pubkey,
           ...messages.map((message) => message.pubkey),
+          // Mentioned users too — chips need the mentioned profile's display
+          // name even when that user never posted in the chat.
+          ...messages.flatMap(
+            (message) =>
+              message.tags?.flatMap((tag) => {
+                const pubkey = getMentionTagPubkey(tag);
+                return pubkey ? [pubkey] : [];
+              }) ?? [],
+          ),
         ]
           .filter((value): value is string => Boolean(value))
           .map((value) => value.toLowerCase()),
