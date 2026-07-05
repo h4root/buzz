@@ -488,7 +488,7 @@ function ChatTranscriptMessageRow({
         {isUser ? (
           <Bubble side="right">
             <Markdown
-              className="min-w-0 [&_*]:text-primary-foreground [&_a]:text-primary-foreground [&_code]:bg-primary-foreground/15 [&_code]:text-primary-foreground"
+              className="min-w-0 font-medium [&_*]:text-primary-foreground [&_a]:text-primary-foreground [&_code]:bg-primary-foreground/15 [&_code]:text-primary-foreground"
               compact
               content={displayText || text || " "}
             />
@@ -496,7 +496,7 @@ function ChatTranscriptMessageRow({
         ) : (
           <Markdown
             agentAuthored
-            className="w-full max-w-none text-sm leading-6"
+            className="w-full max-w-none text-sm font-medium leading-6"
             content={displayText || text || " "}
           />
         )}
