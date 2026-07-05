@@ -11,8 +11,10 @@ import {
 } from "lucide-react";
 
 import {
+  readChatPinnedPr,
   updateChatWorkAutomation,
   useChatWorkAutomation,
+  writeChatPinnedPr,
 } from "@/features/chats/lib/chatWorkAutomation";
 import {
   type GithubCheckSummary,
@@ -83,11 +85,20 @@ export function ChatWorkPanel({
   // hidden panel stops polling entirely.
   const monitorActive =
     open || automation.autoFixCi || automation.addressComments;
+  // Pin resolution order: a link posted in THIS chat wins, then the chat's
+  // previously pinned PR, then branch discovery — discovery alone is
+  // ambiguous when agents reuse a worktree across chats in one project.
+  const pinnedHref = React.useMemo(() => readChatPinnedPr(chatId), [chatId]);
   const discoveredPrQuery = useGithubPrForBranchQuery(
-    monitorActive && !prHref ? projectPath : null,
+    monitorActive && !prHref && !pinnedHref ? projectPath : null,
     branch,
   );
-  const effectiveHref = prHref ?? discoveredPrQuery.data ?? null;
+  const effectiveHref = prHref ?? pinnedHref ?? discoveredPrQuery.data ?? null;
+  React.useEffect(() => {
+    if (effectiveHref && effectiveHref !== readChatPinnedPr(chatId)) {
+      writeChatPinnedPr(chatId, effectiveHref);
+    }
+  }, [chatId, effectiveHref]);
   const preview = effectiveHref
     ? parseSupportedLinkPreview(effectiveHref)
     : null;

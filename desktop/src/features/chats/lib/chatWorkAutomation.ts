@@ -143,3 +143,33 @@ export function useChatWorkAutomation(chatId: string): ChatWorkAutomation {
 
   return state;
 }
+
+const PR_STORAGE_PREFIX = "buzz:chat-work-pr:v1";
+
+/**
+ * The PR pinned to a chat. Posted links age out of the windowed message
+ * fetch and branch discovery can resolve several chats sharing a reused
+ * worktree to the same PR — the pin keeps each chat on the PR it actually
+ * resolved first, with posted links always overriding.
+ */
+export function readChatPinnedPr(chatId: string): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(`${PR_STORAGE_PREFIX}:${chatId}`);
+  } catch {
+    return null;
+  }
+}
+
+export function writeChatPinnedPr(chatId: string, href: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(`${PR_STORAGE_PREFIX}:${chatId}`, href);
+  } catch {
+    // Best-effort.
+  }
+}
