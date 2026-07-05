@@ -27,6 +27,7 @@ import {
   NO_PROJECT_SELECTION_ID,
 } from "@/features/chats/lib/chatSetup";
 import { ChatActivityTranscript } from "@/features/chats/ui/ChatActivityTranscript";
+import { CHAT_AUTOMATION_TAG } from "@/features/chats/lib/chatWorkAutomation";
 import {
   deriveBranchFromAgentMessages,
   deriveChatWorkBranch,
@@ -562,6 +563,13 @@ export function ChatDetail({
                           "chat_context",
                           "source",
                         );
+                        // Automation prompts stay invisible: the agent's
+                        // activity and reply anchor here, but no bubble.
+                        const isAutomationMessage = eventHasTag(
+                          message,
+                          CHAT_AUTOMATION_TAG[0],
+                          CHAT_AUTOMATION_TAG[1],
+                        );
                         const isAgentMessage =
                           defaultAgent?.pubkey != null &&
                           normalizePubkey(message.pubkey) ===
@@ -579,7 +587,7 @@ export function ChatDetail({
                               )}
                               messageId={message.id}
                             >
-                              {isContextMessage ? (
+                              {isAutomationMessage ? null : isContextMessage ? (
                                 <ChatContextRow event={message} />
                               ) : (
                                 <ChatMessageRow
@@ -676,7 +684,9 @@ export function ChatDetail({
         <ChatWorkPanel
           branch={workBranch}
           chatId={chat.id}
-          onAutomationPrompt={(content) => void onSend(content, [])}
+          onAutomationPrompt={(content) =>
+            void onSend(content, [], [CHAT_AUTOMATION_TAG])
+          }
           open={showWorkPanel}
           prHref={workPanelHref}
           projectPath={metadata?.projectPath ?? selectedProject?.path ?? null}

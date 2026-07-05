@@ -7,6 +7,17 @@ import * as React from "react";
 const STORAGE_PREFIX = "buzz:chat-work-automation:v1";
 const STORAGE_EVENT = "buzz:chat-work-automation-changed";
 
+/**
+ * Tag attached to automation-generated prompts (auto-fix CI, address
+ * comments). The message still reaches the agent like any user message, but
+ * the chat timeline renders only its activity — not the message bubble — so
+ * armed automation feels ambient instead of ventriloquized.
+ */
+export const CHAT_AUTOMATION_TAG: [string, string] = [
+  "automation",
+  "work-panel",
+];
+
 export type ChatWorkAutomation = {
   autoFixCi: boolean;
   addressComments: boolean;

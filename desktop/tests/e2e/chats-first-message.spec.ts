@@ -187,6 +187,37 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
   await expect(page.getByTestId("automation-auto-fix-ci")).toBeVisible();
   await expect(page.getByTestId("automation-address-comments")).toBeVisible();
 
+  // Arming address-comments fires the automation prompt (2 open threads in
+  // the mock). The message goes out tagged — but no bubble renders: the
+  // automation stays invisible in the timeline.
+  await page.getByTestId("automation-address-comments").click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          (
+            window as Window & {
+              __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
+                command: string;
+                payload?: { content?: string; mediaTags?: string[][] };
+              }>;
+            }
+          ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []
+        ).some(
+          (entry) =>
+            entry.command === "send_channel_message" &&
+            entry.payload?.content?.includes("unanswered review comments") &&
+            entry.payload?.mediaTags?.some(
+              (tag) => tag[0] === "automation" && tag[1] === "work-panel",
+            ),
+        ),
+      ),
+    )
+    .toBe(true);
+  await expect(
+    page.getByLabel("Chat messages").getByText("unanswered review comments"),
+  ).toHaveCount(0);
+
   // The header's PR button toggles the panel.
   await page.getByTestId("toggle-work-panel").click();
   await expect(workPanel).not.toBeVisible();
