@@ -52,7 +52,7 @@ import type {
   ManagedAgent,
   RelayEvent,
 } from "@/shared/api/types";
-import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
+import { CHANNEL_MESSAGE_EVENT_KINDS } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
@@ -281,7 +281,14 @@ export function ChatDetail({
   const visibleMessages = React.useMemo(
     () =>
       messages.filter((message) => {
-        if (message.kind === KIND_SYSTEM_MESSAGE) {
+        // Only true message kinds render: the channel query also delivers
+        // reactions/edits/deletions (kind 7 et al.), and a stray agent 👀
+        // reaction otherwise renders as a tiny emoji bubble.
+        if (
+          !CHANNEL_MESSAGE_EVENT_KINDS.includes(
+            message.kind as (typeof CHANNEL_MESSAGE_EVENT_KINDS)[number],
+          )
+        ) {
           return false;
         }
         const isAgent =
@@ -309,7 +316,13 @@ export function ChatDetail({
   const showAgentIdentity = React.useMemo(() => {
     const others = new Set<string>();
     for (const message of messages) {
-      if (message.kind === KIND_SYSTEM_MESSAGE) {
+      // Same message-kind allowlist as the timeline: a reaction event alone
+      // (an old harness's 👀) must not flip the solo layout to multi-party.
+      if (
+        !CHANNEL_MESSAGE_EVENT_KINDS.includes(
+          message.kind as (typeof CHANNEL_MESSAGE_EVENT_KINDS)[number],
+        )
+      ) {
         continue;
       }
       const pubkey = normalizePubkey(message.pubkey);
