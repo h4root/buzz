@@ -82,17 +82,20 @@ export function ChatListItem({
         onClick={() => onSelectChat(chat.id)}
         type="button"
       >
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate font-medium",
-            // Shimmer class + overlay live on the truncating span itself
-            // (same pattern as MarkerLabel) so long names keep their
-            // ellipsis while the band sweeps the visible text.
-            isAgentRunning && "buzz-shimmer buzz-shimmer-accent",
-          )}
-          data-shimmer-text={isAgentRunning ? name : undefined}
-        >
-          {name}
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {/* Shimmer lives on an inner inline-block sized to the TEXT (the
+              outer span is flex-1 = full row, and the highlight wash would
+              otherwise sweep the whole row). The inner truncates itself so
+              the overlay's ellipsis stays aligned with the visible text. */}
+          <span
+            className={cn(
+              "max-w-full truncate align-bottom",
+              isAgentRunning && "buzz-shimmer buzz-shimmer-accent inline-block",
+            )}
+            data-shimmer-text={isAgentRunning ? name : undefined}
+          >
+            {name}
+          </span>
         </span>
         {isPinned ? (
           <Pin
