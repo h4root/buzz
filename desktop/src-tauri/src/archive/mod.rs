@@ -464,6 +464,11 @@ const DEFAULT_READ_LIMIT: i64 = 50;
 ///
 /// `kinds` is an optional filter; an empty array means "no kinds matched"
 /// (not "all kinds") — callers should pass `null`/`None` when they want all.
+///
+/// Note: stored row payloads are not uniform — kind 44200 rows store the raw
+/// metric payload JSON, while all other kinds store full Nostr Event JSON. A
+/// caller doing `Event::from_json` on an unfiltered read must filter by kind
+/// first (today's only reader filters `kinds: [24200]`).
 #[tauri::command]
 pub fn read_archived_events(
     state: State<'_, AppState>,

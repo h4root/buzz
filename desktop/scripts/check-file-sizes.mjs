@@ -77,7 +77,8 @@ const overrides = new Map([
   // lines. Atomic merge to close the concurrent-seed race. Still queued to split.
   // IMMEDIATE-tx fix: BEGIN IMMEDIATE replaces DEFERRED unchecked_transaction
   // in merge_owner_p_kinds comment block (~5 lines). Still queued to split.
-  ["src-tauri/src/archive/mod.rs", 1700],
+  // doc-comment: mixed row-shape invariant on read_archived_events (~5 lines).
+  ["src-tauri/src/archive/mod.rs", 1705],
   // archive/store.rs: merge_owner_p_kinds fn (read+union+upsert under a single
   // SQLite tx) + 4 unit tests (create-when-none, adds-kind, idempotent,
   // concurrent-interleave). Load-bearing TOCTOU fix for the owner_p shared row.
