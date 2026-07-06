@@ -597,7 +597,7 @@ export function AppShell() {
 
       if (key === "d" && !event.shiftKey) {
         event.preventDefault();
-        window.dispatchEvent(new CustomEvent("buzz:toggle-dictation"));
+        window.dispatchEvent(new CustomEvent("buzz:dictation-key-down"));
         return;
       }
 
@@ -608,9 +608,17 @@ export function AppShell() {
       }
     }
 
+    function handleKeyUp(event: KeyboardEvent) {
+      if (event.key.toLowerCase() === "d") {
+        window.dispatchEvent(new CustomEvent("buzz:dictation-key-up"));
+      }
+    }
+
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
     };
   }, [
     handleOpenBrowseChannels,
