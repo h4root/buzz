@@ -8,7 +8,10 @@ import {
   resetAgentWorkingSignal,
 } from "../../agents/agentWorkingSignal.ts";
 import { resetActiveAgentTurnsStore } from "../../agents/activeAgentTurnsStore.ts";
-import { channelScopedBotTypingPubkeyKey } from "./useChannelActivityTyping.ts";
+import {
+  channelScopedBotTypingPubkeyKey,
+  threadScopedBotTypingHeadIdKey,
+} from "./useChannelActivityTyping.ts";
 
 const AGENT =
   "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
@@ -37,6 +40,44 @@ describe("channelScopedBotTypingPubkeyKey", () => {
       { pubkey: AGENT, threadHeadId: null },
     ]);
     assert.equal(key, `${AGENT},${AGENT_2}`);
+  });
+});
+
+describe("threadScopedBotTypingHeadIdKey", () => {
+  it("excludes channel-scoped typing entries", () => {
+    const key = threadScopedBotTypingHeadIdKey([
+      { pubkey: AGENT, threadHeadId: null },
+    ]);
+    assert.equal(key, "");
+  });
+
+  it("keeps thread-scoped entries and drops channel-scoped ones", () => {
+    const key = threadScopedBotTypingHeadIdKey([
+      { pubkey: AGENT, threadHeadId: null },
+      { pubkey: AGENT_2, threadHeadId: "thread-1" },
+    ]);
+    assert.equal(key, "thread-1");
+  });
+
+  it("dedupes multiple agents in the same thread and sorts head ids", () => {
+    const key = threadScopedBotTypingHeadIdKey([
+      { pubkey: AGENT, threadHeadId: "thread-2" },
+      { pubkey: AGENT_2, threadHeadId: "thread-1" },
+      { pubkey: AGENT, threadHeadId: "thread-1" },
+    ]);
+    assert.equal(key, "thread-1,thread-2");
+  });
+
+  it("is stable across entry order so memoized row state keeps identity", () => {
+    const first = threadScopedBotTypingHeadIdKey([
+      { pubkey: AGENT, threadHeadId: "thread-1" },
+      { pubkey: AGENT_2, threadHeadId: "thread-2" },
+    ]);
+    const second = threadScopedBotTypingHeadIdKey([
+      { pubkey: AGENT_2, threadHeadId: "thread-2" },
+      { pubkey: AGENT, threadHeadId: "thread-1" },
+    ]);
+    assert.equal(first, second);
   });
 });
 

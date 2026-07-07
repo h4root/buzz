@@ -45,6 +45,7 @@ import {
   mentionsKnownAgent,
 } from "@/features/channels/ui/ChannelPane.helpers";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
+import { threadScopedBotTypingHeadIdKey } from "@/features/channels/ui/useChannelActivityTyping";
 import * as agentSessionSelection from "@/features/channels/ui/agentSessionSelection";
 import { Button } from "@/shared/ui/button";
 import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
@@ -55,6 +56,10 @@ import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
+
+/** Stable empty set so no-typing renders keep a constant identity. */
+const EMPTY_WORKING_THREAD_HEAD_IDS: ReadonlySet<string> = new Set();
+
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentPubkeys,
@@ -356,6 +361,19 @@ export const ChannelPane = React.memo(function ChannelPane({
   }, [botTypingEntries, openThreadHeadId]);
   const hasThreadComposerBotActivity =
     threadComposerBotTypingPubkeys.length > 0;
+  // Thread ingress working badges: derive once per typing update, keyed on a
+  // stable sorted string so the Set identity (and every memoized row below it)
+  // only changes when the set of working threads changes — not on each 1s
+  // typing prune tick or entry-array recreation.
+  const workingThreadHeadIdKey =
+    threadScopedBotTypingHeadIdKey(botTypingEntries);
+  const workingThreadHeadIds = React.useMemo<ReadonlySet<string>>(
+    () =>
+      workingThreadHeadIdKey
+        ? new Set(workingThreadHeadIdKey.split(","))
+        : EMPTY_WORKING_THREAD_HEAD_IDS,
+    [workingThreadHeadIdKey],
+  );
   const directMessageIntro = React.useMemo(
     () =>
       buildDirectMessageIntro({
@@ -624,6 +642,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             searchQuery={channelFind.query}
             targetMessageId={targetMessageId}
             threadUnreadCounts={threadUnreadCounts}
+            workingThreadHeadIds={workingThreadHeadIds}
           />
           {isNonMemberView ? (
             <div

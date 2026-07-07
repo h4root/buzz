@@ -31,6 +31,25 @@ export function channelScopedBotTypingPubkeyKey(
     .join(",");
 }
 
+/**
+ * Stable key of thread head ids with active bot typing. Deduped and sorted so
+ * the key (and anything memoized on it) only changes identity when the set of
+ * working threads actually changes — not on every typing prune tick. Channel
+ * -scoped entries (`threadHeadId === null`) are excluded; they belong to
+ * channel-level surfaces.
+ */
+export function threadScopedBotTypingHeadIdKey(
+  entries: readonly Pick<TypingIndicatorEntry, "threadHeadId">[],
+): string {
+  const headIds = new Set<string>();
+  for (const entry of entries) {
+    if (entry.threadHeadId !== null) {
+      headIds.add(entry.threadHeadId);
+    }
+  }
+  return [...headIds].sort().join(",");
+}
+
 export function useChannelActivityTyping({
   activeChannel,
   activeChannelId,

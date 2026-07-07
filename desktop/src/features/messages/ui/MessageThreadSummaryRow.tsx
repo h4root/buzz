@@ -59,6 +59,7 @@ export function MessageThreadSummaryRow({
   depth = 0,
   depthGuideDepths,
   highlightThreadLineDepths,
+  isAgentWorking = false,
   message,
   onCollapseDepthGuide,
   onCollapseDepthGuideHoverChange,
@@ -72,6 +73,8 @@ export function MessageThreadSummaryRow({
   depth?: number;
   depthGuideDepths?: ReadonlyArray<number>;
   highlightThreadLineDepths?: ReadonlyArray<number>;
+  /** True when an agent is actively working (bot typing) in this thread. */
+  isAgentWorking?: boolean;
   message: TimelineMessage;
   onCollapseDepthGuide?: (message: TimelineMessage) => void;
   onCollapseDepthGuideHoverChange?: (
@@ -95,9 +98,10 @@ export function MessageThreadSummaryRow({
     THREAD_SUMMARY_SURFACE_AVATAR_INSET_REM,
   )})`;
   const replyLabel = summary.replyCount === 1 ? "reply" : "replies";
+  const workingSuffix = isAgentWorking ? ", agent working" : "";
   const summaryAriaLabel = summary.lastReplyAt
-    ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}`
-    : `View thread with ${summary.replyCount} ${replyLabel}`;
+    ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}${workingSuffix}`
+    : `View thread with ${summary.replyCount} ${replyLabel}${workingSuffix}`;
   const guideDepths = depthGuideDepths
     ? [...depthGuideDepths]
     : Array.from({ length: Math.max(0, depth - 1) }, (_, index) => index + 1);
@@ -240,6 +244,13 @@ export function MessageThreadSummaryRow({
             />
           ))}
         </div>
+        {isAgentWorking ? (
+          <span
+            aria-hidden="true"
+            className="relative z-10 h-1.5 w-1.5 shrink-0 rounded-full bg-primary motion-safe:animate-pulse"
+            data-testid="message-thread-summary-working-badge"
+          />
+        ) : null}
         <div className="relative z-10 min-w-0">
           <div>
             <span className="font-medium transition-colors group-hover:text-foreground">

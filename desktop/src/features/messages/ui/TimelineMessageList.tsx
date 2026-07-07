@@ -81,6 +81,8 @@ type TimelineMessageListProps = {
   searchQuery?: string;
   /** Per-thread unread counts keyed by thread root id. */
   threadUnreadCounts?: ReadonlyMap<string, number>;
+  /** Thread root ids with an agent actively working (bot typing). */
+  workingThreadHeadIds?: ReadonlySet<string>;
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
@@ -114,6 +116,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchQuery,
   threadUnreadCounts,
   unfollowThreadById,
+  workingThreadHeadIds,
 }: TimelineMessageListProps) {
   const entries = React.useMemo(
     () =>
@@ -224,6 +227,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               videoReviewContext={videoReviewContextById.get(
                 item.entry.message.id,
               )}
+              workingThreadHeadIds={workingThreadHeadIds}
             />
           );
       }
@@ -252,6 +256,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       threadUnreadCounts,
       unfollowThreadById,
       videoReviewContextById,
+      workingThreadHeadIds,
     ],
   );
 
@@ -338,6 +343,7 @@ type MessageRowItemProps = Pick<
   | "searchQuery"
   | "threadUnreadCounts"
   | "unfollowThreadById"
+  | "workingThreadHeadIds"
 > & {
   entry: MainTimelineEntry;
   footer: React.ReactNode;
@@ -374,6 +380,7 @@ function MessageRowItem({
   threadUnreadCounts,
   unfollowThreadById,
   videoReviewContext,
+  workingThreadHeadIds,
 }: MessageRowItemProps) {
   const { message, summary } = entry;
   const canManage = canManageMessageForCurrentUser(
@@ -429,6 +436,7 @@ function MessageRowItem({
         />
         <MessageThreadSummaryRow
           depth={message.depth}
+          isAgentWorking={workingThreadHeadIds?.has(message.id) ?? false}
           message={message}
           onOpenThread={onReply}
           showDepthGuides={false}

@@ -97,6 +97,8 @@ type MessageTimelineProps = {
   unreadCount?: number;
   /** Per-thread unread counts keyed by thread root id. */
   threadUnreadCounts?: ReadonlyMap<string, number>;
+  /** Thread root ids with an agent actively working (bot typing). */
+  workingThreadHeadIds?: ReadonlySet<string>;
 };
 
 type ChannelIntroAction = {
@@ -184,6 +186,7 @@ const MessageTimelineBase = React.forwardRef<
     firstUnreadMessageId = null,
     unreadCount = 0,
     threadUnreadCounts,
+    workingThreadHeadIds,
   }: MessageTimelineProps,
   ref,
 ) {
@@ -614,6 +617,7 @@ const MessageTimelineBase = React.forwardRef<
                     searchQuery={searchQuery}
                     threadUnreadCounts={threadUnreadCounts}
                     unfollowThreadById={unfollowThreadById}
+                    workingThreadHeadIds={workingThreadHeadIds}
                   />
                 </div>
               ) : null}
