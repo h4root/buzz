@@ -364,7 +364,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   // Thread ingress working badges: derive once per typing update, keyed on a
   // stable sorted string so the Set identity (and every memoized row below it)
   // only changes when the set of working threads changes — not on each 1s
-  // typing prune tick or entry-array recreation.
+  // typing prune tick or entry-array recreation. Splitting on "," is safe
+  // because thread head ids are hex64 event ids and can never contain commas.
   const workingThreadHeadIdKey =
     threadScopedBotTypingHeadIdKey(botTypingEntries);
   const workingThreadHeadIds = React.useMemo<ReadonlySet<string>>(
