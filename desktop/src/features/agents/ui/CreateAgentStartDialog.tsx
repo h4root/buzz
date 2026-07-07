@@ -349,11 +349,14 @@ export function CreateAgentStartDialog({
       >
         <AlertDialogContent data-testid="create-agent-start-delete-dialog">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete template?</AlertDialogTitle>
-            <AlertDialogDescription>
+            <AlertDialogTitle>
               {templateToDelete
-                ? `Delete "${templateToDelete.displayName}". Agents created from it are not affected, but this saved template will be removed from all your devices.`
-                : "Delete this saved template."}
+                ? `Delete ${templateToDelete.displayName} template?`
+                : "Delete template?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This only deletes the saved template. Agents created from this
+              template, and the agent it was saved from, won’t be affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
