@@ -13,6 +13,7 @@ import { cn } from "@/shared/lib/cn";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Shimmer } from "@/shared/ui/Shimmer";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import { ComposerLiveActivityFeed } from "./ComposerLiveActivityFeed";
 
 export type BotActivityAgent = Pick<ManagedAgent, "pubkey" | "name">;
 
@@ -217,24 +218,35 @@ export function BotActivityComposerAction({
       </PopoverTrigger>
       <PopoverContent
         align={isInline ? "start" : "end"}
-        className="w-64 p-1"
+        className="w-80 p-0"
         onMouseEnter={keepOpen}
         onMouseLeave={closeWithDelay}
         onOpenAutoFocus={(event) => event.preventDefault()}
         side="top"
         sideOffset={8}
       >
-        <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+        <div className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
           Agents working
         </div>
-        <div className="mt-1 flex flex-col gap-1">
+        <ComposerLiveActivityFeed
+          agents={workingAgents}
+          channelId={channelId}
+          className="h-48"
+          onOpenAgentSession={(pubkey) => {
+            clearHoverTimer();
+            setOpen(false);
+            onOpenAgentSession(pubkey, channelId);
+          }}
+          profiles={profiles}
+        />
+        <div className="flex flex-col gap-0.5 border-t border-border/60 p-1">
           {workingAgents.map((agent) => {
             const isSelected = selectedPubkey === agent.pubkey.toLowerCase();
 
             return (
               <button
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors",
+                  "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-xs transition-colors",
                   isSelected
                     ? "bg-primary/10 text-primary"
                     : "text-foreground hover:bg-accent hover:text-accent-foreground",
@@ -252,10 +264,10 @@ export function BotActivityComposerAction({
                   avatarUrl={agentAvatarUrl(agent)}
                   className="shrink-0"
                   displayName={agent.name}
-                  size="sm"
+                  size="xs"
                 />
                 <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground/70" />
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground/70" />
               </button>
             );
           })}
