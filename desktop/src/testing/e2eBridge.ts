@@ -4302,6 +4302,19 @@ function getMockProjectEventStore(): RelayEvent[] {
   return mockProjectEventStore;
 }
 
+/** Project-scoped publishes (PR/issue comments, NIP-34 status events) carry
+ * a repo-address `a` tag instead of a channel `h` tag — store them with the
+ * seeded project events so refetches see them. */
+function isMockProjectScopedEvent(event: RelayEvent): boolean {
+  const hasRepoAddressTag = event.tags.some(
+    (tag) => tag[0] === "a" && (tag[1] ?? "").startsWith("30617:"),
+  );
+  return (
+    hasRepoAddressTag &&
+    (event.kind === 1 || MOCK_PROJECT_KINDS.has(event.kind))
+  );
+}
+
 function filterMockProjectEvents(filter: MockFilter): RelayEvent[] {
   const authors = filter.authors?.map((author) => author.toLowerCase());
   return getMockProjectEventStore()
@@ -7571,7 +7584,12 @@ function sendToMockSocket(args: {
       return;
     }
 
-    if (filter.kinds?.some((kind) => MOCK_PROJECT_KINDS.has(kind))) {
+    // Project queries: NIP-34 kinds, or kind:1 comments scoped by repo `a`
+    // tag (PR/issue discussions, approvals, review requests).
+    if (
+      filter.kinds?.some((kind) => MOCK_PROJECT_KINDS.has(kind)) ||
+      (filter.kinds?.includes(1) && filter["#a"])
+    ) {
       for (const event of filterMockProjectEvents(filter)) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
       }
@@ -7678,6 +7696,12 @@ function sendToMockSocket(args: {
 
       recordMockUserStatus(event);
       emitMockGlobalEvent(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
+    if (isMockProjectScopedEvent(event)) {
+      getMockProjectEventStore().push(event);
       sendWsText(socket.handler, ["OK", event.id, true, ""]);
       return;
     }
@@ -8109,6 +8133,10 @@ export function maybeInstallE2eTauriMocks() {
           },
           activeConfig,
         );
+      case "get_git_identity":
+        // Matches the "Thomas P" author on a mock snapshot commit so the
+        // viewer-identity avatar attribution is exercised in e2e.
+        return { name: "Thomas P", email: "thomasp@example.com" };
       case "get_project_repo_snapshot":
         return {
           latest_commit: {

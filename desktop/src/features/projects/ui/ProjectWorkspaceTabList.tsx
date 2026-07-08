@@ -6,7 +6,7 @@ import { TabsList, TabsTrigger } from "@/shared/ui/tabs";
 const PROJECT_TAB_TRIGGER_CLASS =
   "h-8 gap-1.5 rounded-full px-3 text-foreground hover:bg-accent hover:text-accent-foreground data-[state=active]:bg-secondary data-[state=active]:text-secondary-foreground data-[state=active]:shadow-xs";
 
-export function ProjectTabsList() {
+export function ProjectTabsList({ prsActive }: { prsActive?: boolean }) {
   return (
     <TabsList className="h-9 w-fit justify-start gap-0.5 bg-transparent p-0">
       <TabsTrigger
@@ -17,17 +17,22 @@ export function ProjectTabsList() {
       >
         <BookOpen className="h-3.5 w-3.5" />
       </TabsTrigger>
+      <TabsTrigger className={PROJECT_TAB_TRIGGER_CLASS} value="files">
+        Code
+      </TabsTrigger>
       <TabsTrigger className={PROJECT_TAB_TRIGGER_CLASS} value="activity">
         Commits
-      </TabsTrigger>
-      <TabsTrigger className={PROJECT_TAB_TRIGGER_CLASS} value="prs">
-        PRs
       </TabsTrigger>
       <TabsTrigger className={PROJECT_TAB_TRIGGER_CLASS} value="issues">
         Issues
       </TabsTrigger>
-      <TabsTrigger className={PROJECT_TAB_TRIGGER_CLASS} value="files">
-        Files
+      <TabsTrigger
+        className={`${PROJECT_TAB_TRIGGER_CLASS}${
+          prsActive ? " bg-secondary text-secondary-foreground shadow-xs" : ""
+        }`}
+        value="prs"
+      >
+        PRs
       </TabsTrigger>
       <TabsTrigger className={PROJECT_TAB_TRIGGER_CLASS} value="contributors">
         Contributors

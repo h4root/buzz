@@ -17,6 +17,11 @@ import { relativeTime } from "@/features/projects/lib/projectsViewHelpers";
 import type { ChannelMember } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Markdown } from "@/shared/ui/markdown";
+import {
+  ProjectFeedRow,
+  ProjectFeedRowCluster,
+  ProjectFeedRowMonoCell,
+} from "./ProjectFeedRow";
 import { ProfileIdentityButton } from "./ProjectProfileIdentity";
 
 function compactDate(createdAt: number) {
@@ -99,29 +104,27 @@ function IssueRow({
   onOpen: () => void;
   profiles?: UserProfileLookup;
 }) {
+  const authorProfile = profiles?.[normalizePubkey(issue.author)];
   const authorLabel = resolveUserLabel({ profiles, pubkey: issue.author });
   const status = issueStatusVisual(issue.status);
 
   return (
-    <button
-      className="flex w-full min-w-0 items-start gap-3 p-3 text-left transition-colors hover:bg-muted/30 focus-visible:bg-muted/30 focus-visible:outline-hidden"
-      onClick={onOpen}
-      type="button"
-    >
-      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-        <CircleDot className="h-5 w-5" />
-      </div>
-      <div className="min-w-0 flex-1 space-y-0.5">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <p className="truncate text-sm font-semibold leading-5 text-foreground">
-            {issue.title}
-          </p>
-          <status.icon className={`h-3.5 w-3.5 shrink-0 ${status.className}`} />
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-4 text-muted-foreground">
-          <span>#{issue.id.slice(0, 8)}</span>
+    <ProjectFeedRow
+      meta={
+        <>
+          <ProfileIdentityButton
+            avatarClassName="shrink-0"
+            avatarSize="xs"
+            avatarUrl={authorProfile?.avatarUrl ?? null}
+            isAgent={authorProfile?.isAgent === true}
+            label={authorLabel}
+            pubkey={issue.author}
+            showLabel={false}
+          />
+          <span className="truncate font-medium text-foreground/80">
+            {authorLabel}
+          </span>
           <span>opened {relativeTime(issue.createdAt)}</span>
-          <span>by {authorLabel}</span>
           <span>·</span>
           <span>{issue.status}</span>
           {issue.labels.map((label) => (
@@ -132,15 +135,32 @@ function IssueRow({
               {label}
             </span>
           ))}
-        </div>
-      </div>
-      {issue.comments.length > 0 ? (
-        <span className="mt-1 flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-          <MessageSquare className="h-3.5 w-3.5" />
-          {issue.comments.length}
-        </span>
-      ) : null}
-    </button>
+        </>
+      }
+      onOpen={onOpen}
+      statusIcon={
+        <status.icon className={`h-3.5 w-3.5 shrink-0 ${status.className}`} />
+      }
+      testId="project-issue-row"
+      title={issue.title}
+      trailing={
+        <>
+          {issue.comments.length > 0 ? (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <MessageSquare className="h-3.5 w-3.5" />
+              {issue.comments.length}
+            </span>
+          ) : null}
+          <ProjectFeedRowCluster>
+            <ProjectFeedRowMonoCell
+              label={`#${issue.id.slice(0, 8)}`}
+              onClick={onOpen}
+              title="View issue"
+            />
+          </ProjectFeedRowCluster>
+        </>
+      }
+    />
   );
 }
 

@@ -47,10 +47,6 @@ type ProjectsOverviewPanelProps = {
   summaries?: Record<string, ProjectActivitySummary>;
 };
 
-function unitLabel(count: number, singular: string, plural = `${singular}s`) {
-  return count === 1 ? singular : plural;
-}
-
 function projectPeople(
   project: Project,
   summary: ProjectActivitySummary | undefined,
@@ -183,13 +179,11 @@ function StatPill({
   icon: Icon,
   label,
   onClick,
-  unit,
 }: {
   count: number;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   onClick: () => void;
-  unit: string;
 }) {
   return (
     <button
@@ -203,11 +197,8 @@ function StatPill({
         </span>
         <Icon className="h-3.5 w-3.5 text-muted-foreground/70" />
       </span>
-      <span className="mt-2 flex min-w-0 items-baseline gap-1.5">
-        <span className="text-2xl font-semibold leading-none tracking-tight text-foreground">
-          {count}
-        </span>
-        <span className="truncate text-xs text-muted-foreground">{unit}</span>
+      <span className="mt-2 text-2xl font-semibold leading-none tracking-tight text-foreground">
+        {count}
       </span>
     </button>
   );
@@ -252,28 +243,24 @@ export function ProjectsOverviewPanel({
               icon={FolderGit2}
               label="Repositories"
               onClick={() => onSelectSection("repositories")}
-              unit={unitLabel(projects.length, "project")}
             />
             <StatPill
               count={stats.prs}
               icon={GitPullRequest}
               label="Pull requests"
               onClick={() => onSelectSection("prs")}
-              unit={unitLabel(stats.prs, "PR")}
             />
             <StatPill
               count={localRepositoryCount}
               icon={Radio}
               label="Local"
               onClick={() => onSelectSection("local")}
-              unit={unitLabel(localRepositoryCount, "checkout")}
             />
             <StatPill
               count={stats.issues}
               icon={CircleDot}
               label="Issues"
               onClick={() => onSelectSection("issues")}
-              unit={unitLabel(stats.issues, "issue")}
             />
           </div>
         </div>
@@ -287,7 +274,7 @@ export function ProjectsOverviewPanel({
           />
         </div>
       </div>
-      <aside className="space-y-4 rounded-xl border border-border/50 bg-card/60 p-4">
+      <aside className="space-y-6 rounded-xl border border-border/50 bg-card/60 p-4">
         <OverviewRailSection title="People">
           <div className="flex flex-wrap gap-1.5">
             {people.slice(0, 18).map((pubkey) => {

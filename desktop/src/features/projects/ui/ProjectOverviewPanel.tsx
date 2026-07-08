@@ -16,7 +16,8 @@ import {
 } from "@/features/projects/lib/projectLanguages";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
-import { ReadmePanel } from "./ProjectRepositoryPanel";
+import { ReadmePanel } from "./ProjectReadmePanel";
+import type { RepoSourceHeaderControls } from "./ProjectRepositorySource";
 
 type ProjectOverviewPanelProps = {
   contributors: ProjectRepoContributor[];
@@ -27,6 +28,8 @@ type ProjectOverviewPanelProps = {
   pullRequests: ProjectPullRequest[];
   readmeFile: ProjectRepoFile | null;
   snapshot: ProjectRepoSnapshot | null | undefined;
+  /** Branch picker + remote/local toggle for the readme header. */
+  sourceControls?: RepoSourceHeaderControls;
 };
 
 function shortHash(hash: string | undefined) {
@@ -113,7 +116,7 @@ export function OverviewRailSection({
   title: string;
 }) {
   return (
-    <section className="space-y-2 border-border/50 border-b pb-4 last:border-b-0 last:pb-0">
+    <section className="space-y-2">
       <h3 className="text-sm font-semibold text-foreground">{title}</h3>
       {children}
     </section>
@@ -129,6 +132,7 @@ export function ProjectOverviewPanel({
   pullRequests,
   readmeFile,
   snapshot,
+  sourceControls,
 }: ProjectOverviewPanelProps) {
   const languages = topLanguages(files);
   const people = projectPeople(project);
@@ -137,19 +141,11 @@ export function ProjectOverviewPanel({
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="min-w-0">
-        {readmeFile ? (
-          <ReadmePanel file={readmeFile} />
-        ) : (
-          <div className="rounded-xl border border-border/50 bg-card/60 p-6 text-sm text-muted-foreground">
-            <p className="font-medium text-foreground">No README found</p>
-            <p className="mt-1">
-              Add a README to this repository to describe the project and help
-              collaborators get started.
-            </p>
-          </div>
-        )}
+        {/* ReadmePanel renders its own "no README" fallback while keeping
+            the branch + source controls reachable. */}
+        <ReadmePanel file={readmeFile} sourceControls={sourceControls} />
       </div>
-      <aside className="space-y-4 rounded-xl border border-border/50 bg-card/60 p-4">
+      <aside className="space-y-6 rounded-xl border border-border/50 bg-card/60 p-4">
         <OverviewRailSection title="People">
           <div className="flex items-center justify-between gap-3">
             <PeopleAvatars people={people} profiles={profiles} />

@@ -22,26 +22,26 @@ export function ProjectsViewModeToggle({
     <fieldset className="flex items-center rounded-lg bg-muted/30 p-0.5">
       <legend className="sr-only">Project layout</legend>
       <Button
+        aria-label="Grid layout"
         aria-pressed={viewMode === "grid"}
-        className="h-7 gap-1.5 px-2"
+        className="h-7 w-7 px-0"
         onClick={() => onViewModeChange("grid")}
         size="xs"
         type="button"
         variant={viewMode === "grid" ? "secondary" : "ghost"}
       >
         <LayoutGrid className="h-3.5 w-3.5" />
-        Grid
       </Button>
       <Button
+        aria-label="List layout"
         aria-pressed={viewMode === "list"}
-        className="h-7 gap-1.5 px-2"
+        className="h-7 w-7 px-0"
         onClick={() => onViewModeChange("list")}
         size="xs"
         type="button"
         variant={viewMode === "list" ? "secondary" : "ghost"}
       >
         <List className="h-3.5 w-3.5" />
-        List
       </Button>
     </fieldset>
   );

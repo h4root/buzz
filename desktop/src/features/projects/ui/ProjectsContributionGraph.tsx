@@ -5,12 +5,14 @@ const WEEK_COUNT = 26;
 const DAYS_PER_WEEK = 7;
 
 // Intensity ramp shared by the cells and the "Less … More" legend.
+// Grayscale on the theme's foreground token: the most active cells are
+// near-black in light mode and near-white in dark mode.
 const LEVEL_CLASSES = [
   "bg-muted/60 dark:bg-muted/40",
-  "bg-emerald-500/30",
-  "bg-emerald-500/50",
-  "bg-emerald-500/75",
-  "bg-emerald-500",
+  "bg-foreground/25",
+  "bg-foreground/50",
+  "bg-foreground/75",
+  "bg-foreground",
 ];
 
 function dayKeyOf(date: Date) {
