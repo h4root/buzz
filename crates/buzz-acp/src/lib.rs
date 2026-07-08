@@ -152,34 +152,109 @@ impl OwnerCache {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnerMatch {
+    Owner,
+    Sibling,
+    NoMatch,
+    NoOwner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthorGateDecision {
+    Allowed(AuthorGateReason),
+    Denied(AuthorGateReason),
+}
+
+impl AuthorGateDecision {
+    pub(crate) fn is_allowed(self) -> bool {
+        matches!(self, AuthorGateDecision::Allowed(_))
+    }
+
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            AuthorGateDecision::Allowed(reason) | AuthorGateDecision::Denied(reason) => {
+                reason.as_str()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthorGateReason {
+    RespondToAnyone,
+    RespondToNobody,
+    Owner,
+    Sibling,
+    Allowlist,
+    MissingOwner,
+    NotOwnerOrSibling,
+    NotAllowlistedOrOwnerSibling,
+}
+
+impl AuthorGateReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            AuthorGateReason::RespondToAnyone => "respond_to_anyone",
+            AuthorGateReason::RespondToNobody => "respond_to_nobody",
+            AuthorGateReason::Owner => "owner",
+            AuthorGateReason::Sibling => "sibling",
+            AuthorGateReason::Allowlist => "allowlist",
+            AuthorGateReason::MissingOwner => "missing_owner",
+            AuthorGateReason::NotOwnerOrSibling => "not_owner_or_sibling",
+            AuthorGateReason::NotAllowlistedOrOwnerSibling => "not_allowlisted_or_owner_sibling",
+        }
+    }
+}
+
 /// Check if `author` is the owner OR a sibling (same owner via NIP-OA).
 ///
 /// For unknown authors, queries their kind:0 profile to extract the NIP-OA
 /// auth tag and verify the owner matches. Result is cached.
-async fn is_owner_or_sibling(
+async fn owner_or_sibling_match(
     author: &str,
     owner_cache: &OwnerCache,
     rest_client: &relay::RestClient,
-) -> bool {
+) -> OwnerMatch {
     let my_owner = match owner_cache.get() {
         Some(o) => o,
-        None => return false, // no owner configured — fail closed
+        None => return OwnerMatch::NoOwner, // no owner configured — fail closed
     };
 
     // Direct owner check.
     if author == my_owner {
-        return true;
+        return OwnerMatch::Owner;
     }
 
     // Check sibling cache.
     if let Some(cached) = owner_cache.is_known_sibling(author) {
-        return cached;
+        return if cached {
+            OwnerMatch::Sibling
+        } else {
+            OwnerMatch::NoMatch
+        };
     }
 
     // Query the author's kind:0 profile to check for NIP-OA auth tag.
     let is_sibling = check_sibling_via_profile(author, my_owner, rest_client).await;
     owner_cache.cache_sibling(author.to_string(), is_sibling);
-    is_sibling
+    if is_sibling {
+        OwnerMatch::Sibling
+    } else {
+        OwnerMatch::NoMatch
+    }
+}
+
+fn owner_match_decision(
+    owner_match: OwnerMatch,
+    no_match_reason: AuthorGateReason,
+) -> AuthorGateDecision {
+    match owner_match {
+        OwnerMatch::Owner => AuthorGateDecision::Allowed(AuthorGateReason::Owner),
+        OwnerMatch::Sibling => AuthorGateDecision::Allowed(AuthorGateReason::Sibling),
+        OwnerMatch::NoOwner => AuthorGateDecision::Denied(AuthorGateReason::MissingOwner),
+        OwnerMatch::NoMatch => AuthorGateDecision::Denied(no_match_reason),
+    }
 }
 
 /// Inbound author gate decision: does this author's event fire a turn?
@@ -187,20 +262,29 @@ async fn is_owner_or_sibling(
 /// Coarse security policy applied before subscription rules. Both `OwnerOnly`
 /// and `Allowlist` accept the owner and same-owner siblings; `Allowlist`
 /// additionally accepts the explicit external pubkey list.
-async fn author_allowed(
+pub(crate) async fn author_gate_decision(
     respond_to: &RespondTo,
     allowlist: &HashSet<String>,
     author: &str,
     owner_cache: &OwnerCache,
     rest_client: &relay::RestClient,
-) -> bool {
+) -> AuthorGateDecision {
     match respond_to {
-        RespondTo::Anyone => true,
-        RespondTo::Nobody => false,
-        RespondTo::OwnerOnly => is_owner_or_sibling(author, owner_cache, rest_client).await,
+        RespondTo::Anyone => AuthorGateDecision::Allowed(AuthorGateReason::RespondToAnyone),
+        RespondTo::Nobody => AuthorGateDecision::Denied(AuthorGateReason::RespondToNobody),
+        RespondTo::OwnerOnly => owner_match_decision(
+            owner_or_sibling_match(author, owner_cache, rest_client).await,
+            AuthorGateReason::NotOwnerOrSibling,
+        ),
         RespondTo::Allowlist => {
-            allowlist.contains(author)
-                || is_owner_or_sibling(author, owner_cache, rest_client).await
+            if allowlist.contains(author) {
+                AuthorGateDecision::Allowed(AuthorGateReason::Allowlist)
+            } else {
+                owner_match_decision(
+                    owner_or_sibling_match(author, owner_cache, rest_client).await,
+                    AuthorGateReason::NotAllowlistedOrOwnerSibling,
+                )
+            }
         }
     }
 }
@@ -1919,7 +2003,9 @@ async fn tokio_main() -> Result<()> {
                             // it never revokes same-owner team bots.
                             {
                                 let author = buzz_event.event.pubkey.to_hex();
-                                let allowed = author_allowed(
+                                let mentions_agent =
+                                    event_mentions_agent(&buzz_event.event, &pubkey_hex);
+                                let decision = author_gate_decision(
                                     &config.respond_to,
                                     &config.respond_to_allowlist,
                                     &author,
@@ -1927,11 +2013,24 @@ async fn tokio_main() -> Result<()> {
                                     &ctx.rest_client,
                                 )
                                 .await;
-                                if !allowed {
+                                if mentions_agent {
+                                    tracing::info!(
+                                        channel_id = %buzz_event.channel_id,
+                                        event_id = %buzz_event.event.id,
+                                        author = %author,
+                                        mode = %config.respond_to,
+                                        allowed = decision.is_allowed(),
+                                        reason = decision.reason(),
+                                        "inbound author gate decision"
+                                    );
+                                }
+                                if !decision.is_allowed() {
                                     tracing::debug!(
                                         channel_id = %buzz_event.channel_id,
-                                        author = %buzz_event.event.pubkey.to_hex(),
+                                        event_id = %buzz_event.event.id,
+                                        author = %author,
                                         mode = %config.respond_to,
+                                        reason = decision.reason(),
                                         "inbound author gate — dropping event"
                                     );
                                     continue;
@@ -3604,18 +3703,136 @@ mod author_gate_tests {
     }
 
     #[tokio::test]
+    async fn test_author_gate_decision_reasons_for_owner_only() {
+        let cache = cache_with_sibling();
+
+        let owner = author_gate_decision(
+            &RespondTo::OwnerOnly,
+            &HashSet::new(),
+            OWNER,
+            &cache,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(owner, AuthorGateDecision::Allowed(AuthorGateReason::Owner));
+
+        let sibling = author_gate_decision(
+            &RespondTo::OwnerOnly,
+            &HashSet::new(),
+            SIBLING,
+            &cache,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(
+            sibling,
+            AuthorGateDecision::Allowed(AuthorGateReason::Sibling)
+        );
+
+        let stranger = author_gate_decision(
+            &RespondTo::OwnerOnly,
+            &HashSet::new(),
+            STRANGER,
+            &cache,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(
+            stranger,
+            AuthorGateDecision::Denied(AuthorGateReason::NotOwnerOrSibling)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_author_gate_decision_reasons_for_allowlist() {
+        let cache = cache_with_sibling();
+        let allowlist = HashSet::from([EXTERNAL.to_string()]);
+
+        let external = author_gate_decision(
+            &RespondTo::Allowlist,
+            &allowlist,
+            EXTERNAL,
+            &cache,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(
+            external,
+            AuthorGateDecision::Allowed(AuthorGateReason::Allowlist)
+        );
+
+        let stranger = author_gate_decision(
+            &RespondTo::Allowlist,
+            &allowlist,
+            STRANGER,
+            &cache,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(
+            stranger,
+            AuthorGateDecision::Denied(AuthorGateReason::NotAllowlistedOrOwnerSibling)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_author_gate_decision_reasons_for_closed_modes() {
+        let cache_without_owner = OwnerCache::new(None);
+
+        let missing_owner = author_gate_decision(
+            &RespondTo::OwnerOnly,
+            &HashSet::new(),
+            OWNER,
+            &cache_without_owner,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(
+            missing_owner,
+            AuthorGateDecision::Denied(AuthorGateReason::MissingOwner)
+        );
+
+        let nobody = author_gate_decision(
+            &RespondTo::Nobody,
+            &HashSet::new(),
+            OWNER,
+            &cache_without_owner,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(
+            nobody,
+            AuthorGateDecision::Denied(AuthorGateReason::RespondToNobody)
+        );
+
+        let anyone = author_gate_decision(
+            &RespondTo::Anyone,
+            &HashSet::new(),
+            STRANGER,
+            &cache_without_owner,
+            &dummy_rest_client(),
+        )
+        .await;
+        assert_eq!(
+            anyone,
+            AuthorGateDecision::Allowed(AuthorGateReason::RespondToAnyone)
+        );
+    }
+
+    #[tokio::test]
     async fn test_allowlist_accepts_sibling_not_in_allowlist() {
         let cache = cache_with_sibling();
         let allowlist = HashSet::from([EXTERNAL.to_string()]);
         assert!(
-            author_allowed(
+            author_gate_decision(
                 &RespondTo::Allowlist,
                 &allowlist,
                 SIBLING,
                 &cache,
                 &dummy_rest_client()
             )
-            .await,
+            .await
+            .is_allowed(),
             "a same-owner sibling must fire a turn under Allowlist even when not listed"
         );
     }
@@ -3625,14 +3842,15 @@ mod author_gate_tests {
         let cache = cache_with_sibling();
         let allowlist = HashSet::from([EXTERNAL.to_string()]);
         assert!(
-            author_allowed(
+            author_gate_decision(
                 &RespondTo::Allowlist,
                 &allowlist,
                 EXTERNAL,
                 &cache,
                 &dummy_rest_client()
             )
-            .await,
+            .await
+            .is_allowed(),
             "an explicitly allowlisted external pubkey must still be accepted"
         );
     }
@@ -3642,14 +3860,15 @@ mod author_gate_tests {
         let cache = cache_with_sibling();
         let allowlist = HashSet::from([EXTERNAL.to_string()]);
         assert!(
-            !author_allowed(
+            !author_gate_decision(
                 &RespondTo::Allowlist,
                 &allowlist,
                 STRANGER,
                 &cache,
                 &dummy_rest_client()
             )
-            .await,
+            .await
+            .is_allowed(),
             "a non-sibling absent from the allowlist must be dropped"
         );
     }
@@ -3659,34 +3878,36 @@ mod author_gate_tests {
         let cache = cache_with_sibling();
         let allowlist = HashSet::new();
         assert!(
-            author_allowed(
+            author_gate_decision(
                 &RespondTo::Allowlist,
                 &allowlist,
                 OWNER,
                 &cache,
                 &dummy_rest_client()
             )
-            .await,
+            .await
+            .is_allowed(),
             "the owner must always be accepted under Allowlist"
         );
     }
 
     // The default `respond-to` is OwnerOnly. Under steering, "an ineligible
-    // author must NOT steer" is enforced *here* — author_allowed drops the
+    // author must NOT steer" is enforced *here* — the author gate drops the
     // event before it reaches the mode gate — not in the gate itself. These
     // pin that invariant against the default mode.
     #[tokio::test]
     async fn test_owner_only_rejects_stranger_so_no_steer() {
         let cache = cache_with_sibling();
         assert!(
-            !author_allowed(
+            !author_gate_decision(
                 &RespondTo::OwnerOnly,
                 &HashSet::new(),
                 STRANGER,
                 &cache,
                 &dummy_rest_client()
             )
-            .await,
+            .await
+            .is_allowed(),
             "under the default OwnerOnly, a stranger must be dropped — so it can never reach the mode gate to steer"
         );
     }
@@ -3696,14 +3917,15 @@ mod author_gate_tests {
         let cache = cache_with_sibling();
         for (who, label) in [(OWNER, "owner"), (SIBLING, "sibling")] {
             assert!(
-                author_allowed(
+                author_gate_decision(
                     &RespondTo::OwnerOnly,
                     &HashSet::new(),
                     who,
                     &cache,
                     &dummy_rest_client()
                 )
-                .await,
+                .await
+                .is_allowed(),
                 "under default OwnerOnly, the {label} must be admitted so steering can fire"
             );
         }

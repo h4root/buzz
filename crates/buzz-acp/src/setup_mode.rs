@@ -25,7 +25,7 @@
 //!
 //! Connect → subscribe → on each matching event:
 //! 1. Apply `ignore_self` gate.
-//! 2. Apply `author_allowed` gate (same as normal mode) so the nudge goes
+//! 2. Apply the author gate (same as normal mode) so the nudge goes
 //!    only to authors the real agent would answer.
 //! 3. Require an explicit @mention via `event_mentions_agent`.
 //! 4. Apply `filter::match_event` so channel/kind rules still constrain.
@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    author_allowed,
+    author_gate_decision,
     config::Config,
     event_mentions_agent, filter,
     relay::{HarnessRelay, RelayEventPublisher},
@@ -295,7 +295,7 @@ pub(crate) async fn run_setup_listener(config: Config, payload: SetupPayload) ->
         // Apply the same author gate as normal mode so the nudge only goes
         // to authors the real agent would have answered.
         let author_hex = buzz_event.event.pubkey.to_hex();
-        let allowed = author_allowed(
+        let decision = author_gate_decision(
             &config.respond_to,
             &config.respond_to_allowlist,
             &author_hex,
@@ -303,6 +303,15 @@ pub(crate) async fn run_setup_listener(config: Config, payload: SetupPayload) ->
             &rest_client,
         )
         .await;
+        tracing::info!(
+            channel_id = %buzz_event.channel_id,
+            event_id = %buzz_event.event.id,
+            author = %author_hex,
+            mode = %config.respond_to,
+            allowed = decision.is_allowed(),
+            reason = decision.reason(),
+            "setup-mode inbound author gate decision"
+        );
 
         // Apply channel/kind filter rules.
         let filter_matched = filter::match_event(
@@ -317,7 +326,7 @@ pub(crate) async fn run_setup_listener(config: Config, payload: SetupPayload) ->
         // Pure gate: author gate verdict + event-id dedup.
         if !should_nudge_for_event(
             buzz_event.event.id,
-            allowed,
+            decision.is_allowed(),
             filter_matched,
             &mut nudged_event_ids,
         ) {
@@ -349,7 +358,7 @@ pub(crate) async fn run_setup_listener(config: Config, payload: SetupPayload) ->
 
 /// Outcome of the pure per-event gate checks in setup mode.
 ///
-/// Callers compute the async gates (`author_allowed`, `filter::match_event`)
+/// Callers compute the async gates (author decision, `filter::match_event`)
 /// up-front, then pass the boolean results here. This helper handles
 /// everything that is synchronous and stateful: the author gate verdict
 /// and event-id dedup.
@@ -358,11 +367,11 @@ pub(crate) async fn run_setup_listener(config: Config, payload: SetupPayload) ->
 #[must_use]
 pub(crate) fn should_nudge_for_event(
     event_id: EventId,
-    author_allowed: bool,
+    author_is_allowed: bool,
     filter_matched: bool,
     nudged_event_ids: &mut HashSet<EventId>,
 ) -> bool {
-    if !author_allowed {
+    if !author_is_allowed {
         tracing::debug!("setup-mode: event filtered by author gate");
         return false;
     }
@@ -723,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_non_allowlisted_author_returns_no_nudge() {
-        // author_allowed = false → should return false regardless of other args.
+        // author_is_allowed = false → should return false regardless of other args.
         let mut dedup: HashSet<EventId> = HashSet::new();
         let event_id = fake_event_id(0xAA);
 

@@ -92,6 +92,7 @@ ok "Schema applied"
 # BUZZ_DB_HOST/PORT rather than the shared `buzz-postgres` container.)
 log "Seeding community (host=${COMMUNITY_HOST}), channels, and members..."
 BUZZ_COMMUNITY_HOST="${COMMUNITY_HOST}" \
+  BUZZ_DB_CONTAINER="${PROJECT}-postgres-1" \
   BUZZ_DB_HOST=localhost BUZZ_DB_PORT=${PG_PORT} BUZZ_DB_USER=buzz \
   BUZZ_DB_PASS=buzz_dev BUZZ_DB_NAME=buzz \
   ./scripts/setup-desktop-test-data.sh
