@@ -279,7 +279,13 @@ export function useLocalDictation({
   useEffect(() => cleanup, [cleanup]);
 
   const startRecording = useCallback(async () => {
-    if (!isEnabled || isStarting || isRecording) return;
+    // Also guard on `isTranscribing`: after `stopRecording()` the previous
+    // session has cleared `isRecording` but is still awaiting its native
+    // `stopped` event, which delivers the final transcript before its
+    // listeners are unregistered. Starting a new session in that window would
+    // unlisten the old session's handlers (below) before its last words
+    // arrived, dropping them. Wait for the prior session to fully stop.
+    if (!isEnabled || isStarting || isRecording || isTranscribing) return;
 
     // Clear abort flag for this new start attempt.
     startAbortedRef.current = false;
@@ -481,7 +487,14 @@ export function useLocalDictation({
     } finally {
       setIsStarting(false);
     }
-  }, [cleanup, flushAudioBatch, isEnabled, isRecording, isStarting]);
+  }, [
+    cleanup,
+    flushAudioBatch,
+    isEnabled,
+    isRecording,
+    isStarting,
+    isTranscribing,
+  ]);
 
   const stopRecording = useCallback(() => {
     // Signal any in-flight startRecording to bail after its next await.
