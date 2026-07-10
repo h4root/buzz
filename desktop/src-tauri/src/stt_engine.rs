@@ -72,6 +72,15 @@ pub struct SttEngineConfig {
     /// Optional: push-to-talk flag — when `Some`, speech is only accumulated
     /// while the flag is true.
     pub ptt_active: Option<Arc<AtomicBool>>,
+    /// When `true`, the worker drains any audio still queued at shutdown and
+    /// transcribes the trailing speech buffer before exiting. Dictation needs
+    /// this so the last words the user spoke before releasing the key still
+    /// land in the transcript. Set to `false` for huddle: leaving a huddle (or
+    /// disabling transcription) calls `shutdown()` then drops the pipeline,
+    /// whose `Drop` joins this worker — running the full drain + final decode
+    /// there would block huddle teardown, and the huddle generation guard
+    /// discards any transcript produced during teardown anyway.
+    pub flush_on_shutdown: bool,
 }
 
 // ── Public engine handle ──────────────────────────────────────────────────────
@@ -265,6 +274,7 @@ fn stt_worker(
 
     // ── 5. Main loop ──────────────────────────────────────────────────────────
     let has_tts = config.tts_active.is_some();
+    let flush_on_shutdown = config.flush_on_shutdown;
     let tts_active_flag = config
         .tts_active
         .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
@@ -351,6 +361,15 @@ fn stt_worker(
     // enqueued batch, so the tail of speech would never reach `speech_buf` and
     // the final flush below would only transcribe older audio — dropping the
     // last words. Process everything still in the channel before flushing.
+    //
+    // Only dictation opts into this (`flush_on_shutdown`). Huddle shutdown must
+    // stay fast: its `Drop` joins this worker, so draining the queue + decoding
+    // the final buffer here would block huddle teardown, and any transcript
+    // produced during teardown is discarded by the huddle generation guard.
+    if !flush_on_shutdown {
+        return;
+    }
+
     while let Ok(bytes) = audio_rx.try_recv() {
         let samples_48k = bytes_to_f32(&bytes);
         input_buf_48k.extend_from_slice(&samples_48k);

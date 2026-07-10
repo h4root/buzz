@@ -621,11 +621,32 @@ export function AppShell() {
       }
     }
 
+    // If the WebView loses focus (Cmd-Tab, clicking another app, an OS focus
+    // change) or is hidden before ⌘D is released, the keyup never fires and the
+    // mic would keep recording. Release the push-to-talk key on blur/hide so
+    // the recording stops instead of running unattended.
+    function releaseDictationKey() {
+      if (dictationKeyHeld) {
+        dictationKeyHeld = false;
+        window.dispatchEvent(new CustomEvent("buzz:dictation-key-up"));
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.hidden) {
+        releaseDictationKey();
+      }
+    }
+
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", releaseDictationKey);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", releaseDictationKey);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [
     handleOpenBrowseChannels,

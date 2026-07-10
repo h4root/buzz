@@ -71,6 +71,7 @@ impl SttPipeline {
             tts_active: Some(tts_active),
             tts_cancel,
             ptt_active,
+            flush_on_shutdown: false,
         };
 
         let (engine, text_rx) = SttEngine::new(config)?;

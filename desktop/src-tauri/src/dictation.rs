@@ -79,6 +79,7 @@ pub async fn start_dictation(state: State<'_, AppState>) -> Result<u64, String> 
         tts_active: None,
         tts_cancel: None,
         ptt_active: None,
+        flush_on_shutdown: true,
     };
 
     let (engine, text_rx) = SttEngine::new(config)?;
