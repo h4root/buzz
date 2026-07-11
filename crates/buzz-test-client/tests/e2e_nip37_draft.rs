@@ -265,7 +265,7 @@ async fn test_draft_rejected_missing_h_tag() {
     let client = http_client();
     let keys = Keys::generate();
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -288,7 +288,7 @@ async fn test_draft_rejected_duplicate_h_tag() {
     let keys = Keys::generate();
     let d = uuid::Uuid::new_v4().to_string();
     let ch = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -311,7 +311,7 @@ async fn test_draft_rejected_non_uuid_h_tag() {
     let client = http_client();
     let keys = Keys::generate();
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -530,7 +530,7 @@ async fn test_draft_accepted_future_expiration() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -549,7 +549,7 @@ async fn test_draft_rejected_missing_d_tag() {
     let client = http_client();
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["k", "9"]).unwrap(),
             Tag::parse(["h", &ch_id]).unwrap(),
@@ -567,7 +567,7 @@ async fn test_draft_rejected_empty_d_tag() {
     let client = http_client();
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", ""]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -588,7 +588,7 @@ async fn test_draft_rejected_oversized_d_tag() {
     let ch_id = create_open_channel(&owner).await;
     // D_TAG_MAX_LEN is 1024 bytes in buzz-db. Use 1025 'a' chars.
     let d_tag = "a".repeat(1025);
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d_tag]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -611,7 +611,7 @@ async fn test_draft_rejected_duplicate_d_tag() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["d", &d]).unwrap(),
@@ -632,7 +632,7 @@ async fn test_draft_rejected_missing_k_tag() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["h", &ch_id]).unwrap(),
@@ -651,7 +651,7 @@ async fn test_draft_rejected_duplicate_k_tag() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -672,7 +672,7 @@ async fn test_draft_rejected_malformed_k_tag_non_decimal() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "0x9"]).unwrap(),
@@ -695,7 +695,7 @@ async fn test_draft_rejected_k_tag_leading_zero() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "09"]).unwrap(),
@@ -715,7 +715,7 @@ async fn test_draft_rejected_k_tag_out_of_range() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "65536"]).unwrap(), // u16::MAX + 1
@@ -735,7 +735,7 @@ async fn test_draft_rejected_p_tag() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -779,7 +779,7 @@ async fn test_draft_rejected_expiration_in_past() {
     let owner = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+    let event = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
         .tags([
             Tag::parse(["d", &d]).unwrap(),
             Tag::parse(["k", "9"]).unwrap(),
@@ -892,7 +892,7 @@ async fn test_draft_same_second_tie_break_lower_id_wins() {
     // Schnorr nonce were deterministic).
     let mut candidates: Vec<nostr::Event> = Vec::new();
     for i in 0u32..20 {
-        let e = EventBuilder::new(Kind::Custom(KIND_DRAFT), &fake_nip44_v2())
+        let e = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
             .tags([
                 Tag::parse(["d", &d]).unwrap(),
                 Tag::parse(["k", "9"]).unwrap(),
@@ -907,11 +907,15 @@ async fn test_draft_same_second_tie_break_lower_id_wins() {
     }
     // Deduplicate by ID (should never trigger, but kept for safety).
     candidates.dedup_by_key(|e| e.id.to_hex());
-    if candidates.len() < 2 {
-        // Extremely unlikely — skip rather than fail.
-        return;
-    }
-    candidates.sort_by(|a, b| a.id.to_hex().cmp(&b.id.to_hex()));
+    // The unique _tiebreak tag guarantees distinct event hashes — this must
+    // always produce at least 2 distinct IDs.  A silent return here would
+    // allow the test to pass without ever exercising the tie-break logic.
+    assert!(
+        candidates.len() >= 2,
+        "expected at least 2 distinct candidate IDs with unique _tiebreak tags; got {}",
+        candidates.len()
+    );
+    candidates.sort_by_key(|a| a.id.to_hex());
     let lowest = candidates.first().unwrap().clone();
     let highest = candidates.last().unwrap().clone();
 
@@ -1259,14 +1263,16 @@ async fn test_draft_attacker_cannot_retrieve_by_known_d_tag_exclusive_ws() {
 async fn test_draft_attacker_cannot_retrieve_draft_by_d_tag_in_mixed_kinds_ws() {
     // An attacker who knows the victim's d-tag value submits
     // kinds=[31234] + #d=[d_value] + author=[victim].  Must get CLOSED, not the event.
-    // This also covers the kindless #d path: explicit kind:31234 is strictly worse
-    // for the attacker than kindless, so if the kind-specific filter is blocked the
-    // kindless variant is also blocked by the author-only gate.
+    //
+    // Positive control: a public kind:30023 (long-form article) published under
+    // the SAME `d` must be returned by kinds=[30023,31234]+author+#d — proving
+    // the filter itself is not broken, only the draft is gated.
     let url = relay_url();
     let client = http_client();
     let victim = Keys::generate();
     let attacker = Keys::generate();
     let ch_id = create_open_channel(&victim).await;
+    // Use the same `d` value for both the draft AND the kind:30023 control.
     let d = uuid::Uuid::new_v4().to_string();
 
     let draft = build_draft(&victim, &d, "9", &ch_id, &fake_nip44_v2());
@@ -1274,14 +1280,15 @@ async fn test_draft_attacker_cannot_retrieve_draft_by_d_tag_in_mixed_kinds_ws() 
     let (ok, msg) = submit_event_http(&client, &victim, &draft).await;
     assert!(ok, "victim draft must be accepted: {msg}");
 
-    // Also publish a public kind:0 so we can verify the filter would return
-    // other results if drafts were not gated.
-    let profile = EventBuilder::new(Kind::Metadata, "{}")
+    // Publish a public kind:30023 with the same d-tag — this is the positive
+    // control that proves kinds=[30023,31234]+#d is a live filter, not a no-op.
+    let article = EventBuilder::new(Kind::Custom(30023), "long-form article content")
+        .tags([Tag::parse(["d", &d]).unwrap()])
         .sign_with_keys(&victim)
         .unwrap();
-    let profile_id = profile.id;
-    let (ok_p, msg_p) = submit_event_http(&client, &victim, &profile).await;
-    assert!(ok_p, "victim profile must be accepted: {msg_p}");
+    let article_id = article.id;
+    let (ok_a, msg_a) = submit_event_http(&client, &victim, &article).await;
+    assert!(ok_a, "victim article must be accepted: {msg_a}");
 
     let mut ac = BuzzTestClient::connect(&url, &attacker)
         .await
@@ -1321,27 +1328,32 @@ async fn test_draft_attacker_cannot_retrieve_draft_by_d_tag_in_mixed_kinds_ws() 
         other => panic!("expected CLOSED for #d+kind:31234 filter, got: {other:?}"),
     }
 
-    // Positive control: a kindless #d filter must NOT return drafts but also
-    // must not CLOSED (it's a valid filter for other kinds).
-    let sid2 = sub_id("d-kindless-check");
-    let filter2 = Filter::new().custom_tag(
-        nostr::SingleLetterTag::lowercase(nostr::Alphabet::D),
-        d.as_str(),
-    );
+    // Mixed-kinds positive control: kinds=[30023,31234] + author + #d=[same d].
+    // The kind:30023 article must appear; the kind:31234 draft must NOT.
+    // Using explicit kinds avoids the p-gated wildcard guard.
+    let sid2 = sub_id("d-mixed-control");
+    let filter2 = Filter::new()
+        .kinds(vec![Kind::Custom(30023), Kind::Custom(KIND_DRAFT)])
+        .author(victim.public_key())
+        .custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::D),
+            d.as_str(),
+        );
     ac.subscribe(&sid2, vec![filter2])
         .await
-        .expect("subscribe kindless");
-    let kindless_results = ac
+        .expect("subscribe mixed kinds");
+    let mixed_results = ac
         .collect_until_eose(&sid2, Duration::from_secs(5))
         .await
-        .expect("collect kindless");
+        .expect("collect mixed kinds");
     assert!(
-        !kindless_results.iter().any(|e| e.id == draft_id),
-        "kindless #d filter must not expose victim's draft to attacker"
+        mixed_results.iter().any(|e| e.id == article_id),
+        "kind:30023 article under same d must appear in [30023,31234]+#d filter (positive control)"
     );
-    // The profile (kind:0) has no d-tag so it won't appear here either; that's fine.
-    // The important thing is the draft is not in the results.
-    let _ = profile_id; // referenced for completeness
+    assert!(
+        !mixed_results.iter().any(|e| e.id == draft_id),
+        "kind:31234 draft must not appear in [30023,31234]+#d filter for attacker"
+    );
 
     ac.disconnect().await.expect("disconnect");
 }
@@ -1610,47 +1622,27 @@ async fn test_draft_live_fanout_only_reaches_author() {
     ac.disconnect().await.expect("disconnect");
 }
 
-// ─── Tenant confinement ───────────────────────────────────────────────────────
+// ─── Nonexistent / alien channel rejection ────────────────────────────────────
+
+// NOTE: test_draft_rejected_nonexistent_channel_h_tag (at the top of this file)
+// already covers this: a draft with a valid-UUID h-tag pointing to no live
+// channel is rejected.  That test is the single authoritative nonexistent-channel
+// guard.  True cross-community tenant confinement is covered at the DB layer by
+// `draft_is_confined_to_its_community` (requires Postgres, wired to CI).
+
+// ─── Kindless channel query — draft privacy ───────────────────────────────────
 
 #[tokio::test]
 #[ignore]
-async fn test_draft_tenant_confinement_channel_from_different_community() {
-    // Channel UUID that exists in one community must not be valid in another.
-    // This test requires a second community/tenant to be reachable — if the
-    // relay runs as a single tenant the test is a no-op (channel simply won't
-    // exist from the adversarial requester's perspective).
-    //
-    // We simulate by using a randomly generated UUID that is almost certain
-    // not to exist in any community: submitting a draft to that UUID must
-    // be rejected by the nonexistent-channel check.
-    let client = http_client();
-    let adversary = Keys::generate();
-    let alien_channel_id = uuid::Uuid::new_v4().to_string();
-
-    let d = uuid::Uuid::new_v4().to_string();
-    let event = build_draft(&adversary, &d, "9", &alien_channel_id, &fake_nip44_v2());
-    let (accepted, msg) = submit_event_http(&client, &adversary, &event).await;
-    assert!(
-        !accepted,
-        "draft to alien/nonexistent channel must be rejected"
-    );
-    assert!(
-        msg.contains("channel") || msg.contains("member") || msg.contains("not found"),
-        "unexpected message: {msg}"
-    );
-}
-
-// ─── Workflow exclusion ───────────────────────────────────────────────────────
-
-#[tokio::test]
-#[ignore]
-async fn test_draft_not_returned_in_kindless_channel_query() {
-    // A kindless channel filter must not return draft events even when the
-    // requester is the author. Draft content is private — never leaked via
-    // channel-scoped queries.
+async fn test_draft_not_returned_in_kindless_channel_query_by_attacker() {
+    // A kindless channel h-tag filter submitted by a non-author must never
+    // return the author's draft.  The attacker has channel membership (the
+    // channel is open) and subscribes to all events in the channel — they
+    // must receive the owner's public messages but not their drafts.
     let url = relay_url();
     let client = http_client();
     let owner = Keys::generate();
+    let attacker = Keys::generate();
     let ch_id = create_open_channel(&owner).await;
     let d = uuid::Uuid::new_v4().to_string();
 
@@ -1668,11 +1660,11 @@ async fn test_draft_not_returned_in_kindless_channel_query() {
     let (ok_m, msg_m) = submit_event_http(&client, &owner, &msg_event).await;
     assert!(ok_m, "channel message must be accepted: {msg_m}");
 
-    // Query by channel h-tag, no kind filter.
-    let mut c = BuzzTestClient::connect(&url, &owner)
+    // Attacker queries by channel h-tag, no kind filter.
+    let mut c = BuzzTestClient::connect(&url, &attacker)
         .await
-        .expect("connect");
-    let sid = sub_id("ch-kindless");
+        .expect("connect attacker");
+    let sid = sub_id("ch-kindless-attacker");
     let filter = Filter::new().custom_tag(
         nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
         ch_id.as_str(),
@@ -1683,15 +1675,15 @@ async fn test_draft_not_returned_in_kindless_channel_query() {
         .await
         .expect("collect");
 
-    // Channel message must appear.
+    // Channel message must appear (positive control — attacker can see public messages).
     assert!(
         results.iter().any(|e| e.id == msg_id),
-        "channel message must appear in h-tag query (positive control)"
+        "channel message must appear in attacker's h-tag query (positive control)"
     );
-    // Draft must be absent — drafts are author-private, not channel-public.
+    // Draft must be absent — author-only gate must strip it before delivery.
     assert!(
         !results.iter().any(|e| e.id == draft_id),
-        "draft must not be returned by a kindless channel h-tag filter"
+        "draft must not be returned by a kindless channel h-tag filter to a non-author"
     );
     c.disconnect().await.expect("disconnect");
 }
@@ -1702,40 +1694,43 @@ async fn test_draft_not_returned_in_kindless_channel_query() {
 #[ignore]
 async fn test_draft_not_indexed_in_fts_search() {
     // A kind:31234 has NULL search_tsv at the storage layer, so NIP-50 search
-    // must never surface it — even when the draft's content would otherwise
-    // contain the search token, and even when the requester is the author.
+    // must never surface it — even when the requester is the author.
+    //
+    // The test explicitly uses kinds=[1,31234] in the search filter so the query
+    // cannot be satisfied by the read-gate alone: if kind:31234 had a non-NULL
+    // tsvector matching the token, the relay would return it to the authorized
+    // author.  NULL tsvector is the only thing that hides it.
     let client = http_client();
     let victim = Keys::generate();
     let attacker = Keys::generate();
     let ch_id = create_open_channel(&victim).await;
     let d = uuid::Uuid::new_v4().to_string();
 
-    // Use a unique marker as the search token and include it in the kind:1 note
-    // content (positive control) and as the "label" of the draft's fake
-    // NIP-44 payload (which is base64 — not searchable at the storage level).
-    let marker = format!("nip37fts_probe_{}", uuid::Uuid::new_v4().simple());
+    // Unique word token — used as kind:1 content (FTS-indexed) and as the
+    // search query for both kinds.
+    let token = format!("nip37probe{}", uuid::Uuid::new_v4().simple());
 
     // Kind:1 control note — MUST appear in FTS results.
-    let note = EventBuilder::new(Kind::TextNote, &marker)
+    let note = EventBuilder::new(Kind::TextNote, &token)
         .sign_with_keys(&victim)
         .unwrap();
     let note_id = note.id;
     let (ok_note, msg_note) = submit_event_http(&client, &victim, &note).await;
     assert!(ok_note, "control note must be accepted: {msg_note}");
 
-    // Kind:31234 draft — MUST NOT appear in FTS results.
-    // Content is valid NIP-44 v2 ciphertext regardless of the marker (storage
-    // layer enforces NULL tsvector for kind:31234 before content is considered).
+    // Kind:31234 draft — NIP-44 v2 content (relay validates).  Storage migration
+    // sets search_tsv = NULL for all kind:31234 rows, so even a theoretically
+    // searchable payload must not surface in FTS results.
     let draft = build_draft(&victim, &d, "9", &ch_id, &fake_nip44_v2());
     let draft_id = draft.id;
     let (ok_d, msg_d) = submit_event_http(&client, &victim, &draft).await;
     assert!(ok_d, "draft must be accepted: {msg_d}");
 
-    // Search as the author with an explicit kinds=[1,31234] filter to ensure we
-    // probe the storage-layer null-tsvector exclusion, not just the read gate.
+    // Search as the author with explicit kinds=[1,31234].  The kind:31234 draft
+    // is excluded by NULL search_tsv; the kind:1 note IS found.
     let search_filter = Filter::new()
         .kinds(vec![Kind::TextNote, Kind::Custom(KIND_DRAFT)])
-        .search(&marker)
+        .search(&token)
         .limit(50);
     let results =
         query_events_http(&client, &victim.public_key().to_hex(), vec![search_filter]).await;
@@ -1756,7 +1751,7 @@ async fn test_draft_not_indexed_in_fts_search() {
     // Attacker-side check: search with kinds=[1,31234] as attacker.
     let attacker_filter = Filter::new()
         .kinds(vec![Kind::TextNote, Kind::Custom(KIND_DRAFT)])
-        .search(&marker)
+        .search(&token)
         .limit(50);
     let attacker_results = query_events_http(
         &client,
@@ -1800,6 +1795,69 @@ async fn test_nip11_advertises_nip37_not_nip40() {
     );
 }
 
+// ─── NIP-09 a-tag deletion guard ─────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore]
+async fn test_nip09_a_tag_deletion_of_draft_is_rejected() {
+    // kind:5 with a single `a` tag targeting `31234:<pubkey>:<d>` must be
+    // rejected at ingest.  The relay must never let a kind:5 event act as an
+    // escape hatch to clear a draft's immutable channel binding.
+    let client = http_client();
+    let owner = Keys::generate();
+    let ch_id = create_open_channel(&owner).await;
+    let d = uuid::Uuid::new_v4().to_string();
+
+    // First publish a draft so there is something to attempt to delete.
+    let draft = build_draft(&owner, &d, "9", &ch_id, &fake_nip44_v2());
+    let (ok_d, msg_d) = submit_event_http(&client, &owner, &draft).await;
+    assert!(
+        ok_d,
+        "draft must be accepted before the deletion attempt: {msg_d}"
+    );
+
+    // Build kind:5 with a single a-tag targeting the draft's NIP-33 address.
+    let a_coord = format!("31234:{}:{}", owner.public_key().to_hex(), d);
+    let deletion = EventBuilder::new(Kind::EventDeletion, "")
+        .tags([Tag::parse(["a", &a_coord]).unwrap()])
+        .sign_with_keys(&owner)
+        .unwrap();
+
+    let (accepted, msg) = submit_event_http(&client, &owner, &deletion).await;
+    assert!(
+        !accepted,
+        "kind:5 a-tag deletion targeting kind:31234 must be rejected; relay said: {msg}"
+    );
+    assert!(
+        msg.contains("31234")
+            || msg.contains("draft")
+            || msg.contains("not supported")
+            || msg.contains("invalid"),
+        "rejection message must explain why; got: {msg}"
+    );
+
+    // The draft must still exist as a live head — the rejected kind:5 must not
+    // have modified anything.
+    let filter = Filter::new()
+        .kind(nostr::Kind::Custom(KIND_DRAFT))
+        .author(owner.public_key())
+        .custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::D),
+            d.as_str(),
+        );
+    let results = query_events_http(&client, &owner.public_key().to_hex(), vec![filter]).await;
+    assert_eq!(
+        results.len(),
+        1,
+        "draft must still have one live head after rejected kind:5 deletion"
+    );
+    assert_eq!(
+        results[0]["id"].as_str().unwrap(),
+        draft.id.to_hex(),
+        "live head must still be the original draft — kind:5 must not have altered it"
+    );
+}
+
 // ─── DM channel path ─────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1839,26 +1897,36 @@ async fn test_draft_accepted_and_replaced_in_dm_channel() {
             .expect("channel_id in DM response")
             .to_string()
     } else {
-        // Fallback: skip test if DM channel UUID is not surfaced here.
-        return;
+        panic!(
+            "DM open response must contain a `response:{{...}}` payload with channel_id; \
+             got message: {msg:?} (full body: {body})"
+        );
     };
 
     // Alice submits a draft bound to the DM channel UUID.
+    // Timestamps are strictly increasing to guarantee deterministic ordering.
     let d = uuid::Uuid::new_v4().to_string();
-    let now = nostr::Timestamp::now().as_secs();
+    let base = nostr::Timestamp::now().as_secs();
     let v1 = build_draft_at(
         &alice,
         &d,
         "9",
         &dm_channel_id,
         &fake_nip44_v2(),
-        nostr::Timestamp::from(now - 1),
+        nostr::Timestamp::from(base - 2),
     );
     let (ok1, msg1) = submit_event_http(&client, &alice, &v1).await;
     assert!(ok1, "draft v1 to DM channel must be accepted: {msg1}");
 
-    // Replace with a newer version.
-    let v2 = build_draft(&alice, &d, "9", &dm_channel_id, &fake_nip44_v2());
+    // Replace with a strictly newer version (base - 1 > base - 2).
+    let v2 = build_draft_at(
+        &alice,
+        &d,
+        "9",
+        &dm_channel_id,
+        &fake_nip44_v2(),
+        nostr::Timestamp::from(base - 1),
+    );
     let v2_id = v2.id;
     let (ok2, msg2) = submit_event_http(&client, &alice, &v2).await;
     assert!(
@@ -1885,8 +1953,14 @@ async fn test_draft_accepted_and_replaced_in_dm_channel() {
         "v2 must be the head after replacement"
     );
 
-    // Tombstone the draft.
-    let tomb = build_tombstone(&alice, &d, "9", &dm_channel_id, nostr::Timestamp::now());
+    // Tombstone the draft (base > base - 1, so this supersedes v2).
+    let tomb = build_tombstone(
+        &alice,
+        &d,
+        "9",
+        &dm_channel_id,
+        nostr::Timestamp::from(base),
+    );
     let tomb_id = tomb.id;
     let (ok_t, msg_t) = submit_event_http(&client, &alice, &tomb).await;
     assert!(ok_t, "tombstone in DM channel must be accepted: {msg_t}");
@@ -1985,27 +2059,27 @@ async fn test_removed_member_cannot_read_drafts_after_removal() {
         );
     }
 
-    // Live fan-out: owner posts a new draft to the same channel; removed member
-    // must not receive it via a pre-existing WS subscription.
+    // Live fan-out: owner posts a new draft to the channel.  The removed
+    // member must not receive it via a pre-existing WS subscription, even
+    // if they filter on author(owner) — only current channel members may
+    // receive owner's drafts.
     let mut removed_client = BuzzTestClient::connect(&url, &member)
         .await
         .expect("connect removed member");
     let sid = sub_id("removed-fanout");
+    // Subscribe to the owner's drafts — if channel membership is properly
+    // enforced, the relay must CLOSE or simply not deliver owner's new draft
+    // to the removed member.
     let live_filter = Filter::new()
         .kind(nostr::Kind::Custom(KIND_DRAFT))
-        .author(member.public_key())
+        .author(owner.public_key())
         .limit(0); // skip historical; only live
-                   // This subscription itself may be CLOSED (author-only with no membership);
-                   // either outcome is correct.
     let _ = removed_client.subscribe(&sid, vec![live_filter]).await;
     let _ = removed_client
         .collect_until_eose(&sid, Duration::from_secs(2))
         .await;
 
-    // Owner submits a new draft for the removed member's address.
-    // (Won't be accepted since owner != member, but any live fanout to removed
-    //  member would indicate a leak.)
-    // Verify no draft events arrive for the removed member.
+    // Owner submits a new draft — this is the live probe event.
     let owner_draft = build_draft(
         &owner,
         &uuid::Uuid::new_v4().to_string(),
@@ -2015,19 +2089,14 @@ async fn test_removed_member_cannot_read_drafts_after_removal() {
     );
     let owner_draft_id = owner_draft.id;
     let (ok_od, _) = submit_event_http(&client, &owner, &owner_draft).await;
-    // Owner's own draft succeeds; check it doesn't reach removed member.
+    // Owner's own draft must be accepted; verify it doesn't reach removed member.
     if ok_od {
         let _ = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                match removed_client.recv_event(Duration::from_secs(1)).await {
-                    Ok(RelayMessage::Event { event, .. }) => {
-                        if event.id == owner_draft_id {
-                            panic!(
-                                "removed member received a draft via live fan-out after removal"
-                            );
-                        }
-                    }
-                    _ => break,
+            while let Ok(RelayMessage::Event { event, .. }) =
+                removed_client.recv_event(Duration::from_secs(1)).await
+            {
+                if event.id == owner_draft_id {
+                    panic!("removed member received owner's draft via live fan-out after removal");
                 }
             }
         })

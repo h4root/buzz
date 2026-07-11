@@ -2792,12 +2792,16 @@ impl Db {
     /// by its d-tag, regardless of which channel it was submitted to. The `channel_id`
     /// parameter is stored on the new row for query scoping but does not affect replacement.
     ///
-    /// **Immutable-channel enforcement (`expected_channel_id`):** When `Some(expected)`,
-    /// the function checks — **inside the advisory lock, before the stale-ordering step** —
-    /// that the current head's `channel_id` equals `expected`.  If it differs the
-    /// transaction is rolled back and an `Err(DbError::DraftChannelMismatch)` is returned.
-    /// Pass `None` to skip the check (all parameterized-replaceable kinds except
-    /// kind:31234 draft wraps).
+    /// **Immutable-channel enforcement (kind:31234):** When the event is a
+    /// kind:31234 draft wrap, the function checks — **inside the advisory lock,
+    /// before the stale-ordering step** — that the current head's `channel_id`
+    /// equals the incoming `channel_id`.  If it differs the transaction is rolled
+    /// back and an `Err(DbError::DraftChannelMismatch)` is returned.
+    ///
+    /// The check is inferred from `event.kind` so no caller can supply a separate
+    /// "expected" value that differs from the "stored" value — the API is
+    /// structurally non-bypassable.  All other parameterized-replaceable kinds
+    /// skip the check.
     ///
     /// Note: `replace_addressable_event()` keys on `channel_id` because it serves
     /// relay-signed NIP-29 group metadata (kind 39000–39002) where the relay is the
@@ -2809,7 +2813,6 @@ impl Db {
         event: &nostr::Event,
         d_tag: &str,
         channel_id: Option<Uuid>,
-        expected_channel_id: Option<Option<Uuid>>,
     ) -> Result<(StoredEvent, bool)> {
         let kind_i32 = buzz_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
@@ -2893,12 +2896,13 @@ impl Db {
 
         // Immutable channel-binding check for kind:31234 draft wraps.
         //
-        // Runs **inside** the advisory lock so the read-then-reject is atomic:
-        // no concurrent writer can slip a different-channel head between the
-        // SELECT and our rollback.
-        if let Some(expected) = expected_channel_id {
+        // Inferred from event.kind — no separate "expected" parameter means no caller
+        // can pass expected=A while storing channel_id=B.  Runs **inside** the advisory
+        // lock so the read-then-reject is atomic: no concurrent writer can slip a
+        // different-channel head between the SELECT and our rollback.
+        if buzz_core::kind::event_kind_u32(event) == buzz_core::kind::KIND_DRAFT {
             if let Some((_, _, head_channel_id)) = &existing {
-                if *head_channel_id != expected {
+                if *head_channel_id != channel_id {
                     tx.rollback().await?;
                     return Err(DbError::DraftChannelMismatch);
                 }
@@ -4210,12 +4214,49 @@ mod tests {
             .unwrap()
     }
 
+    /// Build a kind:31234 event at a specific Unix timestamp (seconds).
+    fn build_test_draft_at(
+        keys: &nostr::Keys,
+        d_tag: &str,
+        channel_id: &Uuid,
+        ts_secs: u64,
+    ) -> nostr::Event {
+        nostr::EventBuilder::new(nostr::Kind::Custom(31234), "")
+            .tags([
+                nostr::Tag::parse(["d", d_tag]).unwrap(),
+                nostr::Tag::parse(["k", "9"]).unwrap(),
+                nostr::Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            ])
+            .custom_created_at(nostr::Timestamp::from(ts_secs))
+            .sign_with_keys(keys)
+            .unwrap()
+    }
+
+    /// Query the live head for a (community, kind:31234, author, d_tag) address.
+    async fn query_draft_head(
+        db: &Db,
+        community_id: CommunityId,
+        author: &nostr::Keys,
+        d_tag: &str,
+    ) -> Vec<buzz_core::StoredEvent> {
+        db.query_events(&EventQuery {
+            kinds: Some(vec![31234_i32]),
+            authors: Some(vec![author.public_key().to_bytes().to_vec()]),
+            d_tag: Some(d_tag.to_string()),
+            ..EventQuery::for_community(community_id)
+        })
+        .await
+        .expect("query draft head")
+    }
+
     /// Tenant confinement: a kind:31234 written to community A must NOT be
     /// visible via community B's `replace_parameterized_event` — the query is
     /// scoped by `community_id`.
     ///
     /// This tests the DB layer directly (two real communities) and does not
-    /// require a second relay instance.
+    /// require a second relay instance.  The full lifecycle is exercised:
+    /// insert → query → replace → tombstone, with each community's head
+    /// checked independently at every step.
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn draft_is_confined_to_its_community() {
@@ -4225,37 +4266,135 @@ mod tests {
 
         let keys = nostr::Keys::generate();
         let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        // Same d_tag for both communities — proves community_id is the real
+        // isolation boundary, not an accidental d_tag split.
         let d_tag = Uuid::new_v4().to_string();
 
-        // Insert a draft into community A.
-        let draft = build_test_draft(&keys, &d_tag, &ch_a);
-        let (_, inserted) = db
-            .replace_parameterized_event(community_a, &draft, &d_tag, Some(ch_a), Some(Some(ch_a)))
-            .await
-            .expect("insert draft into A");
-        assert!(inserted, "draft must be inserted into A");
+        let now = nostr::Timestamp::now().as_secs();
 
-        // Reading the same (pubkey, d_tag) from community B must see no existing head
-        // → expected_channel_id check must pass (no head → no conflict).
+        // Step 1: insert draft v1 into community A.
+        let draft_a_v1 = build_test_draft_at(&keys, &d_tag, &ch_a, now - 3);
+        let (_, inserted_a) = db
+            .replace_parameterized_event(community_a, &draft_a_v1, &d_tag, Some(ch_a))
+            .await
+            .expect("insert draft v1 into A");
+        assert!(inserted_a, "draft v1 must be inserted into A");
+
+        // Step 2: same (pubkey, d_tag) in community B is an independent address.
+        let draft_b_v1 = build_test_draft_at(&keys, &d_tag, &ch_b, now - 3);
+        let (_, inserted_b) = db
+            .replace_parameterized_event(community_b, &draft_b_v1, &d_tag, Some(ch_b))
+            .await
+            .expect("same (pubkey, d_tag) in community B must succeed as independent address");
+        assert!(
+            inserted_b,
+            "draft must be stored as a new independent head in B"
+        );
+
+        // Verify each community sees only its own head.
+        let heads_a = query_draft_head(&db, community_a, &keys, &d_tag).await;
+        let heads_b = query_draft_head(&db, community_b, &keys, &d_tag).await;
+        assert_eq!(
+            heads_a.len(),
+            1,
+            "A must have exactly one head after v1 insert"
+        );
+        assert_eq!(
+            heads_b.len(),
+            1,
+            "B must have exactly one head after v1 insert"
+        );
+        assert_eq!(
+            heads_a[0].event.id, draft_a_v1.id,
+            "A head must be A's draft v1"
+        );
+        assert_eq!(
+            heads_b[0].event.id, draft_b_v1.id,
+            "B head must be B's draft v1"
+        );
+
+        // Step 3: replace A's draft with v2 — B's head must not change.
+        let draft_a_v2 = build_test_draft_at(&keys, &d_tag, &ch_a, now - 1);
+        let (_, replaced_a) = db
+            .replace_parameterized_event(community_a, &draft_a_v2, &d_tag, Some(ch_a))
+            .await
+            .expect("replace A draft with v2");
+        assert!(replaced_a, "A draft v2 must supersede v1");
+
+        let heads_a_after = query_draft_head(&db, community_a, &keys, &d_tag).await;
+        let heads_b_after = query_draft_head(&db, community_b, &keys, &d_tag).await;
+        assert_eq!(
+            heads_a_after[0].event.id, draft_a_v2.id,
+            "A head must be v2 after replace"
+        );
+        assert_eq!(
+            heads_b_after[0].event.id, draft_b_v1.id,
+            "B head must still be B's v1 — A's replace must not touch B"
+        );
+
+        // Step 4: tombstone A's draft — B's head must still be unchanged.
+        let tombstone_a = build_test_draft_at(&keys, &d_tag, &ch_a, now + 1);
+        let (_, tomb_inserted) = db
+            .replace_parameterized_event(community_a, &tombstone_a, &d_tag, Some(ch_a))
+            .await
+            .expect("tombstone A draft");
+        assert!(tomb_inserted, "tombstone must supersede v2");
+
+        let heads_a_tomb = query_draft_head(&db, community_a, &keys, &d_tag).await;
+        let heads_b_tomb = query_draft_head(&db, community_b, &keys, &d_tag).await;
+        assert_eq!(
+            heads_a_tomb[0].event.id, tombstone_a.id,
+            "A head must be the tombstone"
+        );
+        assert_eq!(
+            heads_b_tomb[0].event.id, draft_b_v1.id,
+            "B head must still be B's v1 — A's tombstone must not touch B"
+        );
+    }
+
+    /// Immutable channel binding — sequential rebind attempt: once a draft
+    /// address (community, author, d_tag) is bound to channel A, a subsequent
+    /// call with the same address but channel B must fail with
+    /// `DraftChannelMismatch`.  The advisory-lock read-then-reject must fire
+    /// on a plain sequential call — no concurrent race required.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn draft_channel_binding_is_immutable_across_sequential_calls() {
+        let db = setup_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+
+        let keys = nostr::Keys::generate();
+        let ch_a = Uuid::new_v4();
         let ch_b = Uuid::new_v4();
-        let draft_b = build_test_draft(&keys, &d_tag, &ch_b);
+        let d_tag = Uuid::new_v4().to_string();
+
+        let now = nostr::Timestamp::now().as_secs();
+
+        // Bind the address to ch_a.
+        let draft_v1 = build_test_draft_at(&keys, &d_tag, &ch_a, now - 1);
+        let (_, inserted) = db
+            .replace_parameterized_event(community, &draft_v1, &d_tag, Some(ch_a))
+            .await
+            .expect("initial insert for ch_a must succeed");
+        assert!(inserted, "draft must be inserted on first call");
+
+        // Attempt to rebind the same address to ch_b — must be rejected.
+        let draft_v2 = build_test_draft_at(&keys, &d_tag, &ch_b, now + 1);
         let result = db
-            .replace_parameterized_event(
-                community_b,
-                &draft_b,
-                &d_tag,
-                Some(ch_b),
-                Some(Some(ch_b)),
-            )
+            .replace_parameterized_event(community, &draft_v2, &d_tag, Some(ch_b))
             .await;
         assert!(
-            result.is_ok(),
-            "same (pubkey, d_tag) in community B must be an independent address; got: {result:?}"
+            matches!(result, Err(DbError::DraftChannelMismatch)),
+            "sequential rebind to a different channel must return DraftChannelMismatch; got: {result:?}"
         );
-        let (_, b_inserted) = result.unwrap();
-        assert!(
-            b_inserted,
-            "draft must be stored as a new independent head in B"
+
+        // The stored head must still be the original v1 (bound to ch_a).
+        let heads = query_draft_head(&db, community, &keys, &d_tag).await;
+        assert_eq!(heads.len(), 1, "exactly one live head after failed rebind");
+        assert_eq!(
+            heads[0].event.id, draft_v1.id,
+            "live head must still be v1 bound to ch_a — rebind must not overwrite it"
         );
     }
 
@@ -4264,6 +4403,8 @@ mod tests {
     ///
     /// One must win (the first committer) and the second must get
     /// `DraftChannelMismatch` — never a corrupt split-brain state.
+    /// Post-race: the live head for the winning address must be exactly one
+    /// event bound to the winning channel.
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn concurrent_different_channel_drafts_one_wins_one_loses() {
@@ -4284,7 +4425,7 @@ mod tests {
         let d_a = d_tag.clone();
         let ev_a = draft_a.clone();
         let fut_a = async move {
-            db_a.replace_parameterized_event(community, &ev_a, &d_a, Some(ch_a), Some(Some(ch_a)))
+            db_a.replace_parameterized_event(community, &ev_a, &d_a, Some(ch_a))
                 .await
         };
 
@@ -4292,7 +4433,7 @@ mod tests {
         let d_b = d_tag.clone();
         let ev_b = draft_b.clone();
         let fut_b = async move {
-            db_b.replace_parameterized_event(community, &ev_b, &d_b, Some(ch_b), Some(Some(ch_b)))
+            db_b.replace_parameterized_event(community, &ev_b, &d_b, Some(ch_b))
                 .await
         };
 
@@ -4320,6 +4461,25 @@ mod tests {
             mismatches, 1,
             "exactly one concurrent write must fail with DraftChannelMismatch; \
              res_a={res_a:?}, res_b={res_b:?}"
+        );
+
+        // Post-race invariant: the address must have exactly one live head,
+        // bound to the winning channel.
+        let winning_ch = if matches!(&res_a, Ok((_, true))) {
+            ch_a
+        } else {
+            ch_b
+        };
+        let heads = query_draft_head(&db, community, &keys, &d_tag).await;
+        assert_eq!(
+            heads.len(),
+            1,
+            "address must have exactly one live head after the race"
+        );
+        assert_eq!(
+            heads[0].channel_id,
+            Some(winning_ch),
+            "live head must be bound to the winning channel"
         );
     }
 }

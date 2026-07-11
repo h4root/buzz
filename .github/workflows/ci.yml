@@ -620,6 +620,15 @@ jobs:
         run: cargo test --profile ci -p buzz-test-client --test e2e_nip37_draft -- --ignored
         env:
           RELAY_URL: ws://localhost:3000
+      - name: NIP-37 draft wrap DB tests
+        # DB-layer tests for NIP-37 draft wraps: tenant confinement (A/B
+        # independent heads across communities), immutable channel-binding
+        # (sequential rebind → DraftChannelMismatch), and race-guard
+        # (concurrent writes → exactly one winner + one DraftChannelMismatch).
+        # These run directly against Postgres without a relay process.
+        run: cargo test --profile ci -p buzz-db -- draft --ignored
+        env:
+          DATABASE_URL: postgres://buzz:buzz_dev@localhost:5432/buzz
       - name: Upload relay log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

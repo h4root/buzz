@@ -1984,6 +1984,18 @@ async fn handle_a_tag_deletion(
     let actor_bytes = effective_message_author(event, &state.relay_keypair.public_key());
 
     match kind_num {
+        // NIP-37 draft wraps use an empty-content tombstone (kind:31234 with ""
+        // content) for deletion — they do NOT use NIP-09 a-tag soft-deletion.
+        // Accepting a NIP-09 a-tag soft-delete would erase the head row, after
+        // which a different-channel write would see no existing head and bypass
+        // the immutable-binding invariant.  Reject with an error so the
+        // caller can surface it as a validation failure.
+        buzz_core::kind::KIND_DRAFT => {
+            return Err(anyhow::anyhow!(
+                "NIP-09 a-tag deletion of kind:31234 draft wraps is not supported; \
+                 use an empty-content tombstone (kind:31234 with empty content) instead"
+            ));
+        }
         buzz_core::kind::KIND_WORKFLOW_DEF => {
             // Try UUID first (workflow_id); fall back to name-based lookup.
             if let Ok(wf_id) = uuid::Uuid::parse_str(d_tag) {
@@ -3037,7 +3049,7 @@ pub async fn publish_dm_visibility_snapshot(
 
     let (stored, was_inserted) = state
         .db
-        .replace_parameterized_event(tenant.community(), &event, &viewer_hex, None, None)
+        .replace_parameterized_event(tenant.community(), &event, &viewer_hex, None)
         .await?;
     if was_inserted {
         dispatch_persistent_event(

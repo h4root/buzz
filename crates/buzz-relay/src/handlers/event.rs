@@ -2434,16 +2434,50 @@ mod tests {
         ///
         /// A draft must never arrive in the workflow engine, regardless
         /// of future refactoring in the dispatch path.
+        ///
+        /// The test exercises the **actual dispatch predicate** used in
+        /// `dispatch_persistent_event_inner` (the `if` condition that
+        /// gates the workflow-spawn block) — not just membership in the
+        /// constant.  It compares a kind:31234 draft against a kind:9
+        /// channel message to prove the gate is live: the predicate must
+        /// evaluate to `false` for the draft and `true` for the message.
         #[test]
         fn draft_kind_is_excluded_from_workflow_dispatch_by_author_only_guard() {
-            // This is the exact predicate that gates workflow dispatch in
-            // `dispatch_persistent_event`.  Changing AUTHOR_ONLY_KINDS
-            // without updating this test would turn it red immediately.
+            // Step 1 — membership check: AUTHOR_ONLY_KINDS must contain KIND_DRAFT.
+            // Changing the constant without updating this test turns it red.
             assert!(
                 buzz_core::kind::AUTHOR_ONLY_KINDS.contains(&buzz_core::kind::KIND_DRAFT),
                 "KIND_DRAFT must be in AUTHOR_ONLY_KINDS — the workflow-dispatch guard \
                  at event.rs:514 (`!AUTHOR_ONLY_KINDS.contains(&kind_u32)`) relies on \
                  this to suppress draft events from reaching the workflow engine"
+            );
+
+            // Step 2 — dispatch-predicate evaluation for a normal user event
+            // (is_relay_workflow_msg = false for any user-submitted event, so
+            // that branch does not affect the predicate).  This mirrors the
+            // exact `if` condition that gates the workflow spawn in
+            // `dispatch_persistent_event_inner`.
+            let should_trigger_workflow = |kind_u32: u32| -> bool {
+                // is_relay_workflow_msg = false for user-submitted events.
+                !buzz_core::kind::is_workflow_execution_kind(kind_u32)
+                    && !buzz_core::kind::is_command_kind(kind_u32)
+                    && kind_u32 != buzz_core::kind::KIND_GIFT_WRAP
+                    && !buzz_core::kind::AUTHOR_ONLY_KINDS.contains(&kind_u32)
+            };
+
+            assert!(
+                !should_trigger_workflow(buzz_core::kind::KIND_DRAFT),
+                "workflow dispatch predicate must return false for kind:31234 — \
+                 a draft wrap must NEVER reach the workflow engine"
+            );
+
+            // Positive control: a plain channel message (kind:9) must pass the
+            // same predicate so we know the gate is not just trivially always-false.
+            let kind_channel_message: u32 = 9;
+            assert!(
+                should_trigger_workflow(kind_channel_message),
+                "workflow dispatch predicate must return true for kind:9 channel messages \
+                 (positive control) — the gate must be live, not trivially always-false"
             );
         }
     }

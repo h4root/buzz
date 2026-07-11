@@ -2020,6 +2020,33 @@ async fn ingest_event_inner(
                 "invalid: deletion events must reference exactly one target via e or a tag (got e={e_count}, a={a_count})"
             )));
         }
+
+        // NIP-37 draft wraps (kind:31234) do NOT support NIP-09 a-tag deletion.
+        // Accepting it would erase the head row, after which a write with a
+        // different channel could bypass the immutable-binding invariant.
+        // The correct NIP-37 deletion mechanism is an empty-content tombstone
+        // (kind:31234 with "" content) that keeps the address visible and
+        // preserves the channel binding.
+        if a_count == 1 {
+            let targets_draft = event.tags.iter().any(|t| {
+                if t.kind().to_string() == "a" {
+                    t.content()
+                        .and_then(|v| v.split(':').next())
+                        .and_then(|k| k.parse::<u32>().ok())
+                        .map(|k| k == KIND_DRAFT)
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            });
+            if targets_draft {
+                return Err(IngestError::Rejected(
+                    "invalid: NIP-09 a-tag deletion of kind:31234 draft wraps is not supported; \
+                     use an empty-content tombstone (kind:31234 with empty content) instead"
+                        .into(),
+                ));
+            }
+        }
     }
 
     if kind_u32 == KIND_STREAM_MESSAGE_EDIT {
@@ -2395,25 +2422,14 @@ async fn ingest_event_inner(
             )));
         }
 
-        // For kind:31234 draft wraps, pass the expected channel_id so that
         // replace_parameterized_event enforces the immutable-binding invariant
-        // atomically inside the advisory lock.  All other parameterized-
-        // replaceable kinds pass None (no channel binding constraint).
-        let expected_channel_id = if kind_u32 == KIND_DRAFT {
-            Some(channel_id)
-        } else {
-            None
-        };
-
+        // for kind:31234 draft wraps atomically inside the advisory lock by
+        // inferring the check from event.kind — no separate expected_channel_id
+        // parameter needed.  All other parameterized-replaceable kinds have no
+        // channel binding constraint.
         state
             .db
-            .replace_parameterized_event(
-                tenant.community(),
-                &event,
-                &d_tag,
-                channel_id,
-                expected_channel_id,
-            )
+            .replace_parameterized_event(tenant.community(), &event, &d_tag, channel_id)
             .await
             .map_err(|e| match e {
                 buzz_db::DbError::DraftChannelMismatch => IngestError::Rejected(
