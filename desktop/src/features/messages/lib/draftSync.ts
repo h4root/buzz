@@ -244,6 +244,10 @@ export class DraftSyncManager {
         limit: 1,
       });
       state = this.state.get(address) ?? state;
+      if (state.pendingDeletion) {
+        this.reschedulePublishes();
+        return;
+      }
       if (state.remoteHead?.content === "") {
         state.pendingPublish = undefined;
         removeRemoteDraftEntry(pending.draftKey);
@@ -271,9 +275,30 @@ export class DraftSyncManager {
         "Timed out publishing draft.",
         "Failed to publish draft.",
       );
-      state.base = event;
-      state.remoteHead = event;
-      state.pendingPublish = undefined;
+      const current = this.state.get(address) ?? state;
+      const deletionWon =
+        current.pendingDeletion !== undefined ||
+        current.remoteHead?.content === "";
+      if (!current.remoteHead || compareHeads(event, current.remoteHead) >= 0) {
+        current.base = event;
+        current.remoteHead = event;
+      }
+      if (current.pendingPublish === pending)
+        current.pendingPublish = undefined;
+      if (deletionWon) {
+        const deletion =
+          current.pendingDeletion ??
+          ({
+            draftKey: pending.draftKey,
+            channelId: pending.channelId,
+            address,
+          } satisfies PendingDeletion);
+        deletion.base = event;
+        current.pendingDeletion = deletion;
+        this.writeSidecar();
+        await this.publishTombstone(deletion);
+      }
+      this.reschedulePublishes();
     } catch (error) {
       console.warn("[draftSync] draft publish failed:", error);
     }

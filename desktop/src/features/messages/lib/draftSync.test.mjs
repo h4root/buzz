@@ -24,6 +24,7 @@ import {
   clearAllDrafts,
   initDraftStore,
   loadDraftEntry,
+  removeRemoteDraftEntry,
   saveDraftEntry,
 } from "./useDrafts.ts";
 
@@ -378,4 +379,93 @@ test("test_unuploaded_attachment_cancels_stale_text_publish", async () => {
   await manager.destroy();
 
   assert.equal(published.length, 0);
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+test("test_newer_edit_during_inflight_publish_survives", async () => {
+  setup();
+  const published = [];
+  const firstPublish = deferred();
+  const manager = new DraftSyncManager(pubkey, "wss://relay.example", {
+    deriveAddress: async () => "address-a",
+    encrypt: async (content) => content,
+    fetchEvents: async () => [],
+    sign: async (input) => ({
+      id: `signed-${published.length}`,
+      created_at: input.createdAt ?? 0,
+      kind: input.kind,
+      pubkey,
+      content: input.content,
+      sig: "",
+      tags: input.tags,
+    }),
+    publishEvent: async (event) => {
+      published.push(event);
+      if (published.length === 1) await firstPublish.promise;
+    },
+  });
+
+  manager.queuePublish(channelA, draft(channelA, "older edit"));
+  const flush = manager.flushPublishes();
+  while (published.length === 0) await Promise.resolve();
+  manager.queuePublish(channelA, draft(channelA, "newer edit"));
+  firstPublish.resolve();
+  await flush;
+  await manager.destroy();
+
+  assert.equal(published.length, 2);
+  assert.match(published[1].content, /newer edit/);
+});
+
+test("test_deletion_during_inflight_publish_wins", async () => {
+  setup();
+  const published = [];
+  const firstPublish = deferred();
+  const tombstonePublished = deferred();
+  const manager = new DraftSyncManager(pubkey, "wss://relay.example", {
+    deriveAddress: async () => "address-a",
+    encrypt: async (content) => content,
+    fetchEvents: async () => [],
+    sign: async (input) => ({
+      id: `signed-${published.length}`,
+      created_at: input.createdAt ?? 0,
+      kind: input.kind,
+      pubkey,
+      content: input.content,
+      sig: "",
+      tags: input.tags,
+    }),
+    publishEvent: async (event) => {
+      published.push(event);
+      if (published.length === 1) await firstPublish.promise;
+      if (event.content === "") tombstonePublished.resolve();
+    },
+  });
+
+  const local = draft(channelA, "draft to delete");
+  saveDraftEntry(channelA, local);
+  manager.queuePublish(channelA, local);
+  const flush = manager.flushPublishes();
+  while (published.length === 0) await Promise.resolve();
+  const deletion = manager.queueDeletion(channelA, channelA);
+  await tombstonePublished.promise;
+  removeRemoteDraftEntry(channelA);
+  firstPublish.resolve();
+  await flush;
+  await deletion;
+  await manager.destroy();
+
+  const draftEvent = published.find((event) => event.content !== "");
+  const rebasedTombstone = published.find(
+    (event) => event.content === "" && event.created_at > draftEvent.created_at,
+  );
+  assert.ok(rebasedTombstone);
+  assert.equal(loadDraftEntry(channelA), undefined);
 });
