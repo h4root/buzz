@@ -203,7 +203,9 @@ const overrides = new Map([
   // checkAcpNodeRuntime wrapper for the bundled-bridge Node.js doctor check
   // (+35 lines on rebase union with main's Doctor/team growth). Queued to
   // split with the rest of this file.
-  ["src/shared/api/tauri.ts", 1340],
+  // bundled-adapter-doctor-copy: adapter_bundled field on
+  // RawAcpRuntimeCatalogEntry + mapper passthrough (+3 lines).
+  ["src/shared/api/tauri.ts", 1343],
   // doctor-npm-eacces-preflight: hint field added to InstallStepResult (+1 line).
   // doctor-install-reliability: AuthStatus tagged union + nodeRequired/authStatus/
   // loginHint fields on AcpRuntimeCatalogEntry (+14 lines). Load-bearing new feature.
@@ -221,7 +223,9 @@ const overrides = new Map([
   // bundled-bridge Node.js doctor check (+23 lines on rebase union with
   // main's Git Bash / signout-wipe / team-instructions type growth);
   // "adapter_outdated" availability retired with the codex version gate (-1 line).
-  ["src/shared/api/types.ts", 1069],
+  // bundled-adapter-doctor-copy: adapterBundled field on
+  // AcpRuntimeCatalogEntry (+2 lines).
+  ["src/shared/api/types.ts", 1071],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -280,7 +284,9 @@ const overrides = new Map([
   // codex_adapter_availability/is_outdated, AdapterOutdated arm) made
   // obsolete by pinned bundling; ratcheting 1371 -> 1250 to bank the
   // deletions (main's Windows Doctor install growth stays).
-  ["src-tauri/src/managed_agents/discovery.rs", 1250],
+  // bundled-adapter-doctor-copy: adapter_bundled computed in the discovery
+  // sweep so the Doctor UI can hide the bundle path (+4 lines).
+  ["src-tauri/src/managed_agents/discovery.rs", 1254],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
