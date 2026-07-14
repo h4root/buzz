@@ -3454,10 +3454,20 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
 }
 
 fn configured_mcp_server(server: &config::ConfiguredMcpServer) -> McpServer {
+    // Shell-split: users may type `uv run /path/to/jambot` as the command.
+    // First whitespace-delimited token is the executable; remaining tokens
+    // are prepended before `server.args`.
+    let mut parts = server.command.split_whitespace();
+    let command = parts.next().unwrap_or_default().to_string();
+    let prefix_args: Vec<String> = parts.map(String::from).collect();
+
+    let mut args = prefix_args;
+    args.extend(server.args.iter().cloned());
+
     McpServer {
         name: server.name.clone(),
-        command: server.command.clone(),
-        args: server.args.clone(),
+        command,
+        args,
         env: server
             .env
             .iter()
@@ -4067,6 +4077,38 @@ mod build_mcp_servers_tests {
             servers[0].name, "mcp",
             "Path::new(\".\").file_stem() is None — should fall back to \"mcp\""
         );
+    }
+
+    #[test]
+    fn configured_mcp_server_shell_splits_command() {
+        let server = config::ConfiguredMcpServer {
+            name: "jambot".into(),
+            command: "uv run /path/to/jambot".into(),
+            args: vec!["--port".into(), "8080".into()],
+            env: vec![],
+        };
+
+        let result = super::configured_mcp_server(&server);
+        assert_eq!(result.command, "uv");
+        assert_eq!(
+            result.args,
+            vec!["run", "/path/to/jambot", "--port", "8080"],
+        );
+        assert_eq!(result.name, "jambot");
+    }
+
+    #[test]
+    fn configured_mcp_server_bare_command_unchanged() {
+        let server = config::ConfiguredMcpServer {
+            name: "github".into(),
+            command: "npx".into(),
+            args: vec!["github-mcp".into()],
+            env: vec![],
+        };
+
+        let result = super::configured_mcp_server(&server);
+        assert_eq!(result.command, "npx");
+        assert_eq!(result.args, vec!["github-mcp"]);
     }
 }
 
