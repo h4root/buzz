@@ -6,17 +6,22 @@
 -- that makes draft wraps author-private. The relay also must not index
 -- plaintext compose context through any search surface.
 --
--- Additive migration: previously applied files must not change checksum.
--- We must DROP the generated column and re-ADD it with the extended exclusion
--- list; ALTER COLUMN cannot change a GENERATED expression in Postgres.
+-- Conditional migration: fresh installs already have the positive FTS allowlist
+-- from 0008 (kind IN (0, 9, 40002, 45001, 45003)), which excludes 31234 by
+-- omission. Populated databases still on the legacy negative blocklist need
+-- the column rewritten to add 31234 to the exclusion list. This migration
+-- inspects the live column expression and acts accordingly:
+--   - Allowlist form (contains '45001') → no-op, 31234 already unsearchable.
+--   - Legacy blocklist form → DROP + re-ADD with 31234 added to exclusion.
 --
--- DEPLOY NOTE: the DROP + re-ADD below acquires ACCESS EXCLUSIVE on `events`
+-- DEPLOY NOTE: the DROP + re-ADD path acquires ACCESS EXCLUSIVE on `events`
 -- for the duration of the migration, blocking all reads and writes to the
 -- table. The GIN index rebuild that follows is a full table scan. On large
 -- deployments this migration should run during a scheduled maintenance window.
 -- This is the same shape as migration 0005 and was accepted as precedent.
+-- The no-op path (fresh installs) acquires no exclusive lock.
 --
--- Final kind exclusion list after this migration:
+-- Final kind exclusion list after this migration (legacy path):
 --   1059   = KIND_GIFT_WRAP                  (NIP-17 ciphertext)
 --   30300  = KIND_EVENT_REMINDER             (AUTHOR_ONLY_KINDS — defense in depth)
 --   30622  = KIND_DM_VISIBILITY              (per-viewer private hide state)
@@ -32,12 +37,34 @@
 -- NULL tsvector never matches `@@`, so excluded rows are storage-level
 -- unsearchable.
 
-ALTER TABLE events DROP COLUMN search_tsv;
-ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (
-    CASE WHEN kind IN (1059, 30300, 30622, 31234, 44100, 44101, 44200) THEN NULL::tsvector
-         ELSE to_tsvector('simple', content)
-    END
-) STORED;
+LOCK TABLE events IN SHARE ROW EXCLUSIVE MODE;
 
--- Recreate the GIN index dropped with the column.
-CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);
+DO $$
+DECLARE
+    expr text;
+BEGIN
+    SELECT pg_get_expr(adbin, adrelid) INTO expr
+    FROM pg_attrdef
+    WHERE adrelid = 'events'::regclass
+      AND adnum = (SELECT attnum FROM pg_attribute
+                   WHERE attrelid = 'events'::regclass
+                     AND attname = 'search_tsv');
+
+    -- The positive allowlist form (0008) contains '45001' in its kind list.
+    -- If present, 31234 is already excluded by omission — nothing to do.
+    IF expr IS NOT NULL AND expr LIKE '%45001%' THEN
+        RAISE NOTICE '0012_draft_wrap_fts: allowlist expression detected, 31234 already excluded — no-op';
+        RETURN;
+    END IF;
+
+    -- Legacy blocklist form: rewrite to add 31234 to the exclusion list.
+    ALTER TABLE events DROP COLUMN search_tsv;
+    ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (
+        CASE WHEN kind IN (1059, 30300, 30622, 31234, 44100, 44101, 44200) THEN NULL::tsvector
+             ELSE to_tsvector('simple', content)
+        END
+    ) STORED;
+
+    -- Recreate the GIN index dropped with the column.
+    CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);
+END $$;
