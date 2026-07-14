@@ -225,7 +225,9 @@ const overrides = new Map([
   // "adapter_outdated" availability retired with the codex version gate (-1 line).
   // bundled-adapter-doctor-copy: adapterBundled field on
   // AcpRuntimeCatalogEntry (+2 lines).
-  ["src/shared/api/types.ts", 1071],
+  // bundled-cli-probes: "cli_missing" availability retired; +4 doc lines on
+  // AcpAvailabilityStatus explaining why the state no longer exists.
+  ["src/shared/api/types.ts", 1075],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -289,7 +291,10 @@ const overrides = new Map([
   // claude-code-acp-fallback-retirement: the legacy command moved from the
   // resolution sweep to identity-only aliases; +5 comment lines documenting
   // the commands/aliases split that move makes load-bearing.
-  ["src-tauri/src/managed_agents/discovery.rs", 1259],
+  // bundled-cli-probes: resolve_probe_binary (bundled-CLI-first probe
+  // resolution) + classify_runtime/underlying_cli doc rewrites for the
+  // CliMissing retirement (+8 lines).
+  ["src-tauri/src/managed_agents/discovery.rs", 1267],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
@@ -304,7 +309,11 @@ const overrides = new Map([
   // bundle-acps: version-gate retirement deletes the probe/availability test
   // sections; ratcheting 1271 -> 1067 to bank the deletions (main's Windows
   // Doctor test growth keeps this above the 1000 default).
-  ["src-tauri/src/managed_agents/discovery/tests.rs", 1067],
+  // bundled-cli-probes: CliMissing test reworked to assert Available when the
+  // adapter resolves without an underlying CLI (+2 comment lines); main's
+  // Windows install-command tests inverted to assert the bundled runtimes
+  // expose no install commands (-13 lines).
+  ["src-tauri/src/managed_agents/discovery/tests.rs", 1056],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode

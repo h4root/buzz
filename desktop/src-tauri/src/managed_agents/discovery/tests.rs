@@ -176,13 +176,15 @@ fn classifies_not_installed_when_no_underlying_cli() {
 }
 
 #[test]
-fn classifies_cli_missing_when_adapter_found_but_cli_absent() {
+fn classifies_available_when_adapter_found_even_without_underlying_cli() {
+    // The retired CliMissing gate must not come back: a resolving adapter is
+    // available regardless of whether an underlying CLI is on the user PATH.
     let (status, cmd, path) = classify_runtime(
         Some(("codex-acp", PathBuf::from("/opt/homebrew/bin/codex-acp"))),
         Some("codex"),
         false,
     );
-    assert_eq!(status, AcpAvailabilityStatus::CliMissing);
+    assert_eq!(status, AcpAvailabilityStatus::Available);
     assert_eq!(cmd.as_deref(), Some("codex-acp"));
     assert_eq!(path.as_deref(), Some("/opt/homebrew/bin/codex-acp"));
 }
@@ -868,64 +870,51 @@ fn test_command_basenames_dotted_name_no_extra_candidates() {
 
 // ── Phase B: cli_install_commands_for_os ────────────────────────────────────
 
-/// Claude and Codex have non-empty default cli_install_commands (install.sh).
+/// Claude and Codex vendor their CLIs inside the bundled ACP packages —
+/// the curl-pipe install commands are retired with the cli_missing gate.
 #[test]
-fn test_claude_and_codex_have_cli_install_commands() {
+fn test_claude_and_codex_have_no_cli_install_commands() {
     let claude = super::known_acp_runtime_exact("claude").unwrap();
     let codex = super::known_acp_runtime_exact("codex").unwrap();
     assert!(
-        !claude.cli_install_commands.is_empty(),
-        "claude must have cli install commands"
+        claude.cli_install_commands.is_empty(),
+        "claude CLI ships inside the bundled adapter — must not have cli install commands"
     );
     assert!(
-        !codex.cli_install_commands.is_empty(),
-        "codex must have cli install commands"
+        codex.cli_install_commands.is_empty(),
+        "codex CLI ships inside the bundled adapter — must not have cli install commands"
     );
 }
 
-/// cli_install_commands_for_os returns a non-empty slice for claude and codex.
+/// cli_install_commands_for_os is empty for claude and codex on every platform.
 #[test]
-fn test_cli_install_commands_for_os_non_empty_for_claude_codex() {
+fn test_cli_install_commands_for_os_empty_for_claude_codex() {
     let claude = super::known_acp_runtime_exact("claude").unwrap();
     let codex = super::known_acp_runtime_exact("codex").unwrap();
     assert!(
-        !claude.cli_install_commands_for_os().is_empty(),
-        "claude must have install commands on every platform"
+        claude.cli_install_commands_for_os().is_empty(),
+        "claude must not have install commands on any platform"
     );
     assert!(
-        !codex.cli_install_commands_for_os().is_empty(),
-        "codex must have install commands on every platform"
+        codex.cli_install_commands_for_os().is_empty(),
+        "codex must not have install commands on any platform"
     );
 }
 
-/// On Windows, Claude and Codex select the PowerShell install commands.
+/// On Windows, the bundled runtimes still expose no install commands, and
+/// goose keeps its platform-neutral commands.
 #[cfg(windows)]
 #[test]
-fn test_cli_install_commands_for_os_selects_powershell_on_windows() {
+fn test_cli_install_commands_for_os_on_windows() {
     let claude = super::known_acp_runtime_exact("claude").unwrap();
     let codex = super::known_acp_runtime_exact("codex").unwrap();
-
-    // Windows must select the PowerShell commands, not the curl|bash ones.
-    let claude_cmds = claude.cli_install_commands_for_os();
-    let codex_cmds = codex.cli_install_commands_for_os();
-
-    assert_ne!(
-        claude_cmds, claude.cli_install_commands,
-        "Windows must NOT use the default curl|bash commands for claude"
-    );
-    assert_ne!(
-        codex_cmds, codex.cli_install_commands,
-        "Windows must NOT use the default curl|bash commands for codex"
-    );
-
-    // Verify they are the PowerShell installers.
     assert!(
-        claude_cmds.iter().any(|c| c.contains("powershell")),
-        "claude Windows install must use powershell; got: {claude_cmds:?}"
+        claude.cli_install_commands_for_os().is_empty(),
+        "claude ships bundled — no Windows install commands"
     );
     assert!(
-        codex_cmds.iter().any(|c| c.contains("powershell")),
-        "codex Windows install must use powershell; got: {codex_cmds:?}"
+        codex.cli_install_commands_for_os().is_empty(),
+        "codex ships bundled — no Windows install commands"
     );
 
     // Goose and buzz-agent must NOT use Windows-specific commands.
