@@ -1,12 +1,13 @@
 ---
-title: Buzz Privacy and Support
+title: "Buzz Privacy and Support"
 ---
 
 # Buzz privacy and support
 
 Information for people using the Buzz collaboration app.
 
-- [Privacy policy](privacy.html)
+- [Terms of service](terms.html)
+- [Privacy notice](privacy.html)
 - [Support](support.html)
 - [Source code](https://github.com/block/buzz)
 
