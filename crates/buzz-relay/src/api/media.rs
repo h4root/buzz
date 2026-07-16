@@ -3,7 +3,7 @@
 //! Routes:
 //!   PUT  /media                 — BUD-05 sanitizing media upload
 //!   PUT  /upload                — BUD-02 exact-byte non-media upload
-//!   PUT  /media/upload          — temporary legacy compatibility route
+//!   PUT  /media/upload          — temporary media-only legacy auth route
 //!   GET  /media/{sha256_ext}    — BUD-01 serve blob
 //!   HEAD /media/{sha256_ext}    — BUD-01 existence check
 
@@ -282,7 +282,7 @@ async fn upload_attribution(
     })
 }
 
-/// PUT /media, /upload, or the temporary /media/upload compatibility route.
+/// PUT /media, /upload, or the temporary media-only /media/upload route.
 ///
 /// Auth is validated via the [`AuthenticatedUpload`] extractor BEFORE the body
 /// is read, preventing unauthenticated clients from forcing body buffering.

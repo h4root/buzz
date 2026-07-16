@@ -56,6 +56,19 @@ async fn upload_file(client: &Client, keys: &Keys, body: &[u8]) -> reqwest::Resp
         .expect("file upload request")
 }
 
+async fn upload_legacy_media(client: &Client, keys: &Keys, body: &[u8]) -> reqwest::Response {
+    let sha256 = hex::encode(Sha256::digest(body));
+    let auth = sign_blossom_auth_for_verb(keys, &sha256, "upload");
+    client
+        .put(format!("{}/media/upload", relay_http_url()))
+        .header("Authorization", blossom_auth_header(&auth))
+        .header("X-SHA-256", &sha256)
+        .body(body.to_vec())
+        .send()
+        .await
+        .expect("legacy media upload request")
+}
+
 fn blossom_auth_header(event: &nostr::Event) -> String {
     format!(
         "Nostr {}",
@@ -486,17 +499,36 @@ async fn test_legacy_media_upload_alias_sanitizes_with_upload_verb() {
     let client = http_client();
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
-    let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let auth = sign_blossom_auth_for_verb(&keys, &sha256, "upload");
-    let resp = client
-        .put(format!("{}/media/upload", relay_http_url()))
-        .header("Authorization", blossom_auth_header(&auth))
-        .header("X-SHA-256", &sha256)
-        .body(jpeg)
-        .send()
-        .await
-        .expect("legacy upload request");
+    let resp = upload_legacy_media(&client, &keys, &jpeg).await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_legacy_media_upload_alias_rejects_pdf() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let pdf = b"%PDF-1.4 fake pdf content here for testing";
+    let resp = upload_legacy_media(&client, &keys, pdf).await;
+    assert_eq!(
+        resp.status(),
+        415,
+        "legacy media route must reject recognized non-media files"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_legacy_media_upload_alias_rejects_opaque_binary() {
+    let client = http_client();
+    let keys = Keys::generate();
+    let opaque: Vec<u8> = (0..1000).map(|i| (i * 37 % 256) as u8).collect();
+    let resp = upload_legacy_media(&client, &keys, &opaque).await;
+    assert_eq!(
+        resp.status(),
+        415,
+        "legacy media route must reject unknown non-media files"
+    );
 }
 
 #[tokio::test]

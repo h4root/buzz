@@ -17,8 +17,9 @@ use crate::validation::{
 };
 
 /// Upload route semantics. `Media` transforms recognized media, `Upload`
-/// preserves exact non-media bytes, and `Legacy` keeps the historical route
-/// while applying the same sanitizer whenever the body is recognized media.
+/// preserves exact non-media bytes, and `Legacy` keeps the historical upload
+/// authorization while otherwise enforcing the same media-only policy as
+/// `Media`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadRouteMode {
     Media,
@@ -97,22 +98,7 @@ pub async fn process_streaming_ingest(
 
     let source_probe = crate::sanitize::probe_media(&source_path, &sniff, config).await?;
     let is_media = source_probe.is_some();
-    match (mode, is_media) {
-        (UploadRouteMode::Media, false) => {
-            return Err(MediaError::UnsupportedMedia(
-                "non-media attachment".to_string(),
-            ));
-        }
-        (UploadRouteMode::Upload, true) => {
-            return Err(MediaError::UnsupportedMedia(
-                source_probe
-                    .as_ref()
-                    .map(|probe| probe.mime.clone())
-                    .unwrap_or_else(|| "media".to_string()),
-            ));
-        }
-        _ => {}
-    }
+    enforce_route_policy(mode, source_probe.as_ref())?;
 
     enforce_source_size(source_probe.as_ref(), source_size, config)?;
 
@@ -305,6 +291,21 @@ pub async fn process_streaming_ingest(
         Some(&meta),
         uploaded_at,
     ))
+}
+
+fn enforce_route_policy(
+    mode: UploadRouteMode,
+    source_probe: Option<&crate::sanitize::MediaProbe>,
+) -> Result<(), MediaError> {
+    match (mode, source_probe) {
+        (UploadRouteMode::Media | UploadRouteMode::Legacy, None) => Err(
+            MediaError::UnsupportedMedia("non-media attachment".to_string()),
+        ),
+        (UploadRouteMode::Upload, Some(probe)) => {
+            Err(MediaError::UnsupportedMedia(probe.mime.clone()))
+        }
+        _ => Ok(()),
+    }
 }
 
 async fn stream_source(
@@ -970,6 +971,20 @@ fn build_descriptor(
 mod tests {
     use super::*;
 
+    fn image_probe() -> crate::sanitize::MediaProbe {
+        crate::sanitize::MediaProbe {
+            class: crate::sanitize::MediaClass::Image,
+            mime: "image/jpeg".to_string(),
+            ext: "jpg".to_string(),
+            video_codec: None,
+            audio_codec: None,
+            width: Some(1),
+            height: Some(1),
+            duration_secs: None,
+            frame_count: Some(1),
+        }
+    }
+
     fn test_config() -> MediaConfig {
         MediaConfig {
             s3_endpoint: String::new(),
@@ -1121,6 +1136,28 @@ mod tests {
 
         // Non-limit errors should remain as Other.
         assert_eq!(detect("connection reset"), std::io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn route_policy_keeps_legacy_media_only() {
+        let probe = image_probe();
+
+        assert!(enforce_route_policy(UploadRouteMode::Media, Some(&probe)).is_ok());
+        assert!(enforce_route_policy(UploadRouteMode::Legacy, Some(&probe)).is_ok());
+        assert!(enforce_route_policy(UploadRouteMode::Upload, None).is_ok());
+
+        assert!(matches!(
+            enforce_route_policy(UploadRouteMode::Media, None),
+            Err(MediaError::UnsupportedMedia(_))
+        ));
+        assert!(matches!(
+            enforce_route_policy(UploadRouteMode::Legacy, None),
+            Err(MediaError::UnsupportedMedia(_))
+        ));
+        assert!(matches!(
+            enforce_route_policy(UploadRouteMode::Upload, Some(&probe)),
+            Err(MediaError::UnsupportedMedia(mime)) if mime == "image/jpeg"
+        ));
     }
 
     #[test]
