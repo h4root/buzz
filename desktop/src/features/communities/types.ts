@@ -2,7 +2,6 @@ export type Community = {
   id: string;
   name: string;
   relayUrl: string;
-  token?: string;
   /**
    * The pubkey associated with the active identity at the time the community
    * was created. Display-only — auth always uses the persisted `identity.key`
@@ -24,4 +23,11 @@ export type Community = {
    * authoritative private key is the on-disk `identity.key` file.
    */
   nsec?: never;
+  /**
+   * @deprecated Never read. A relay API token from before the relay moved to
+   * pure Nostr key auth (NIP-42/NIP-98) — the backend stopped accepting it,
+   * so the secret sat unused in localStorage. New entries never set this
+   * field, and `loadCommunities()` strips it on read.
+   */
+  token?: never;
 };

@@ -57,16 +57,24 @@ export function loadCommunities(): Community[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    // Migration: older builds stored the user's `nsec` in localStorage and
-    // re-applied it to the backend on every reload, which silently overwrote
-    // any `import_identity` result with the original generated key. The
-    // on-disk `identity.key` file is the only source of truth now. Strip
-    // any lingering `nsec` from existing entries on read and persist the
-    // cleaned list back so it cannot leak into future sessions.
+    // Migration: strip secrets older builds persisted but nothing reads.
+    // - `nsec`: older builds stored the user's nsec in localStorage and
+    //   re-applied it to the backend on every reload, which silently overwrote
+    //   any `import_identity` result with the original generated key. The
+    //   on-disk `identity.key` file is the only source of truth now.
+    // - `token`: a relay API token from before the relay moved to pure Nostr
+    //   key auth (NIP-42/NIP-98). The backend command that once consumed it
+    //   stopped accepting it, so the secret sat unused in localStorage.
+    // Strip both from existing entries on read and persist the cleaned list
+    // back so they cannot leak into future sessions.
     let didStrip = false;
     const cleaned = (parsed as Array<Record<string, unknown>>).map((entry) => {
-      if (entry && typeof entry === "object" && "nsec" in entry) {
-        const { nsec: _nsec, ...rest } = entry;
+      if (
+        entry &&
+        typeof entry === "object" &&
+        ("nsec" in entry || "token" in entry)
+      ) {
+        const { nsec: _nsec, token: _token, ...rest } = entry;
         didStrip = true;
         return rest;
       }

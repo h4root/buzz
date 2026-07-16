@@ -31,7 +31,6 @@ export function AddCommunityDialog({
 }: AddCommunityDialogProps) {
   const [name, setName] = React.useState("");
   const [relayUrl, setRelayUrl] = React.useState("");
-  const [token, setToken] = React.useState("");
   const [inviteCode, setInviteCode] = React.useState("");
   const [reposDir, setReposDir] = React.useState("");
   const communityOnboarding = useCommunityOnboarding();
@@ -41,7 +40,6 @@ export function AddCommunityDialog({
     onOpenChange(false);
     setName("");
     setRelayUrl("");
-    setToken("");
     setInviteCode("");
     setReposDir("");
     setReposDirError(null);
@@ -72,20 +70,11 @@ export function AddCommunityDialog({
         relayUrl: normalizedRelayUrl,
         inviteCode: inviteCode.trim() || undefined,
         communityName: name.trim() || deriveCommunityName(normalizedRelayUrl),
-        token: token.trim() || undefined,
         reposDir: expandedReposDir,
       });
       handleClose();
     },
-    [
-      name,
-      relayUrl,
-      token,
-      inviteCode,
-      reposDir,
-      communityOnboarding,
-      handleClose,
-    ],
+    [name, relayUrl, inviteCode, reposDir, communityOnboarding, handleClose],
   );
 
   return (
@@ -134,24 +123,6 @@ export function AddCommunityDialog({
               placeholder="My Community"
               type="text"
               value={name}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label
-              className="text-sm font-medium text-foreground"
-              htmlFor="ws-token"
-            >
-              API Token
-              <span className="ml-1 text-xs font-normal text-muted-foreground">
-                (optional)
-              </span>
-            </label>
-            <Input
-              id="ws-token"
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="buzz_..."
-              type="password"
-              value={token}
             />
           </div>
           <div className="flex flex-col gap-1.5">

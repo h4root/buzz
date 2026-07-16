@@ -28,7 +28,7 @@ type SidebarProfileCardProps = {
   onSwitchCommunity: (id: string) => void;
   onUpdateCommunity: (
     id: string,
-    updates: Partial<Pick<Community, "name" | "relayUrl" | "token">>,
+    updates: Partial<Pick<Community, "name" | "relayUrl">>,
   ) => void;
   profile?: Profile;
   resolvedDisplayName: string;

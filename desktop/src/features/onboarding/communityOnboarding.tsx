@@ -27,7 +27,6 @@ export type CommunityOnboardingTransaction = {
   relayUrl: string;
   inviteCode?: string;
   communityName: string;
-  token?: string;
   reposDir?: string;
   communityId?: string;
   createdAt: string;
@@ -40,7 +39,6 @@ export type StartCommunityOnboardingInput = {
   relayUrl: string;
   inviteCode?: string;
   communityName?: string;
-  token?: string;
   reposDir?: string;
 };
 
@@ -115,7 +113,6 @@ export function startCommunityOnboarding(
       ...existing,
       inviteCode: input.inviteCode?.trim() || existing.inviteCode,
       communityName: input.communityName?.trim() || existing.communityName,
-      token: input.token?.trim() || existing.token,
       reposDir: input.reposDir ?? existing.reposDir,
       updatedAt: now.toISOString(),
       error: undefined,
@@ -132,7 +129,6 @@ export function startCommunityOnboarding(
     relayUrl,
     inviteCode: input.inviteCode?.trim() || undefined,
     communityName: input.communityName?.trim() || deriveCommunityName(relayUrl),
-    token: input.token?.trim() || undefined,
     reposDir: input.reposDir,
     createdAt: timestamp,
     updatedAt: timestamp,

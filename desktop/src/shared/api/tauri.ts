@@ -1273,16 +1273,16 @@ export async function cancelPairing(): Promise<void> {
   await invokeTauri("cancel_pairing");
 }
 
+// Arg keys must match the Rust `apply_workspace` parameters exactly — Tauri
+// silently drops undeclared keys (a legacy `token` arg was lost this way).
 export async function applyCommunity(
   relayUrl: string,
   nsec?: string,
-  token?: string,
   reposDir?: string,
 ): Promise<void> {
   await invokeTauri("apply_workspace", {
     relayUrl,
     nsec: nsec ?? null,
-    token: token ?? null,
     reposDir: reposDir ?? null,
   });
 }
