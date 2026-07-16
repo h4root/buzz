@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::Write,
     sync::{
         atomic::{AtomicBool, AtomicU16},
@@ -21,10 +21,22 @@ pub struct AppState {
     /// Workspace-provided relay URL override. Set by `apply_workspace` on app
     /// init and takes priority over env vars and compile-time defaults.
     pub relay_url_override: Mutex<Option<String>>,
-    /// Set during backend setup when managed agents are eligible for launch
-    /// restore. `apply_workspace` consumes it after installing the workspace
-    /// relay and identity, so agents never start against the fallback relay.
+    /// One-shot gate consumed by the first `apply_workspace` after boot to
+    /// restore Share Compute (mesh-llm). Agent activation itself is governed
+    /// by `managed_agent_activation_enabled` + `activated_agent_relays` and
+    /// runs on every `apply_workspace`.
     pub managed_agent_restore_pending: AtomicBool,
+    /// Session-wide gate for lazy agent activation. Set during backend setup
+    /// only when the boot-time repos-dir and identity-recovery safety checks
+    /// allow agents to start; when false, no `apply_workspace` may auto-start
+    /// agents this session.
+    pub managed_agent_activation_enabled: AtomicBool,
+    /// Normalized relay URLs whose workspaces were already activated this app
+    /// session. A workspace's agents lazily start on the first visit and at
+    /// most once per session — bouncing A→B→A must not resurrect agents the
+    /// user manually stopped in A. Never stops agents: switching away leaves
+    /// the other workspace's agents running against their own relay.
+    pub activated_agent_relays: Mutex<HashSet<String>>,
     /// One-shot gate: first `apply_workspace` runs `pin_blank_agent_relays`.
     pub agent_relay_stamp_pending: AtomicBool,
     /// Shared shutdown signal checked by launch-time agent restoration.
@@ -163,6 +175,8 @@ pub fn build_app_state() -> AppState {
             .unwrap_or_else(|_| reqwest::Client::new()),
         relay_url_override: Mutex::new(None),
         managed_agent_restore_pending: AtomicBool::new(false),
+        managed_agent_activation_enabled: AtomicBool::new(false),
+        activated_agent_relays: Mutex::new(HashSet::new()),
         agent_relay_stamp_pending: AtomicBool::new(true),
         shutdown_started: AtomicBool::new(false),
         managed_agent_restore_transition: Mutex::new(()),

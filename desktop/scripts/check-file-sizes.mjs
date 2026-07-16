@@ -363,7 +363,10 @@ const overrides = new Map([
   ["src/features/settings/ui/ProfileSettingsCard.tsx", 1033],
   // keyring-dev-isolation: keyring_service() fn (7 lines) replaces the const
   // to return "buzz-desktop-dev" in debug builds. Load-bearing isolation fix.
-  ["src-tauri/src/app_state.rs", 1042],
+  // lazy-workspace-activation: managed_agent_activation_enabled +
+  // activated_agent_relays fields (with once-per-session contract docs) add
+  // ~14 lines. Queued to split identity resolution out of app_state.rs.
+  ["src-tauri/src/app_state.rs", 1056],
   // multi-slot splitting + no-op suppression (#1309): the ReadStateManager
   // class grew from ~700 lines to ~1019 with the addition of
   // splitContextsIntoBudgetedSlots (pure fn + 5 tests), publishSplitSlots,

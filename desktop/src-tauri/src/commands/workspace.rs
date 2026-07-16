@@ -5,9 +5,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::app_state::AppState;
 use crate::managed_agents::{
-    effective_repos_dir, ensure_repos_symlink, load_managed_agents, nest_dir,
-    rebind_agent_relay_urls, restore_managed_agents_on_launch, save_managed_agents,
-    stamp_blank_agent_relay_urls, try_regenerate_nest, write_persisted_repos_dir,
+    activate_workspace_agents, effective_repos_dir, ensure_repos_symlink, load_managed_agents,
+    nest_dir, rebind_agent_relay_urls, save_managed_agents, stamp_blank_agent_relay_urls,
+    try_regenerate_nest, write_persisted_repos_dir,
 };
 use crate::relay;
 
@@ -107,6 +107,7 @@ pub async fn apply_workspace(
     app: AppHandle,
 ) -> Result<(), String> {
     let restore_app = app.clone();
+    let activation_relay_url = relay_url.clone();
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
 
@@ -192,26 +193,33 @@ pub async fn apply_workspace(
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))??;
 
-    let state = restore_app.state::<AppState>();
-    if state
+    // Lazy per-workspace activation: runs on EVERY apply, and self-gates so
+    // each workspace's agents start at most once per app session (launch
+    // restore is simply the first activation). Nothing is stopped on switch —
+    // the previous workspace's agents keep running against their own relay.
+    // The one-shot restore flag is consumed only for Share Compute (mesh-llm),
+    // which must be up before its dependent agents spawn.
+    #[cfg(feature = "mesh-llm")]
+    let mesh_restore_pending = restore_app
+        .state::<AppState>()
         .managed_agent_restore_pending
-        .swap(false, Ordering::AcqRel)
-    {
-        let app = restore_app.clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app.state::<AppState>();
-            #[cfg(feature = "mesh-llm")]
+        .swap(false, Ordering::AcqRel);
+    let app = restore_app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        #[cfg(feature = "mesh-llm")]
+        if mesh_restore_pending {
             if let Err(error) = crate::commands::mesh_llm::restore_mesh_sharing(&app, &state).await
             {
                 eprintln!("buzz-desktop: failed to restore Share Compute: {error}");
             }
-            if let Err(error) =
-                restore_managed_agents_on_launch(&app, &state.shutdown_started).await
-            {
-                eprintln!("buzz-desktop: failed to restore managed agents: {error}");
-            }
-        });
-    }
+        }
+        if let Err(error) =
+            activate_workspace_agents(&app, &state.shutdown_started, &activation_relay_url).await
+        {
+            eprintln!("buzz-desktop: failed to activate workspace agents: {error}");
+        }
+    });
 
     Ok(())
 }
