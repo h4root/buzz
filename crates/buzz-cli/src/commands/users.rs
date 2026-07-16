@@ -261,19 +261,45 @@ pub async fn cmd_get_presence(client: &BuzzClient, pubkeys_csv: &str) -> Result<
     });
     let resp = client.query(&filter).await?;
     let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
-    let presence: Vec<serde_json::Value> = events
+    let presence = map_presence_events(&events);
+    let output = serde_json::to_string(&presence).unwrap_or_default();
+    println!("{output}");
+    Ok(())
+}
+
+/// Map raw presence events to the CLI's `{pubkey, status, updated_at}` rows.
+///
+/// Presence from the relay's `/query` bridge is synthesized: the event is
+/// signed with the *relay* keypair and names the online user in a `p` tag, so
+/// the subject must be read from that tag — `event.pubkey` there is the relay
+/// signer, not who is online. Real user-signed kind:20001 updates carry no
+/// `p` tag; for those the author is the subject.
+fn map_presence_events(events: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    events
         .iter()
         .map(|e| {
+            let author = e.get("pubkey").and_then(|v| v.as_str()).unwrap_or("");
+            let subject = e
+                .get("tags")
+                .and_then(|t| t.as_array())
+                .and_then(|tags| {
+                    tags.iter().find_map(|tag| {
+                        let tag = tag.as_array()?;
+                        if tag.first()?.as_str()? == "p" {
+                            tag.get(1)?.as_str()
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or(author);
             serde_json::json!({
-                "pubkey": e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""),
+                "pubkey": subject,
                 "status": e.get("content").and_then(|v| v.as_str()).unwrap_or(""),
                 "updated_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
             })
         })
-        .collect();
-    let output = serde_json::to_string(&presence).unwrap_or_default();
-    println!("{output}");
-    Ok(())
+        .collect()
 }
 
 /// Set presence status — sign and submit a kind:20001 presence update event via WebSocket.
@@ -317,5 +343,61 @@ pub async fn dispatch(
         }
         UsersCmd::Presence { pubkeys } => cmd_get_presence(client, &pubkeys).await,
         UsersCmd::SetPresence { status } => cmd_set_presence(client, &status.to_string()).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RELAY_PK: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SUBJECT_PK: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn synthesized_presence_reports_p_tag_subject_not_relay_signer() {
+        // Shape produced by the relay's /query bridge (synthesize_presence):
+        // relay-signed, subject in the `p` tag.
+        let events = vec![serde_json::json!({
+            "pubkey": RELAY_PK,
+            "kind": 20001,
+            "content": "online",
+            "created_at": 1700000000,
+            "tags": [["p", SUBJECT_PK]],
+        })];
+        let rows = map_presence_events(&events);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["pubkey"], SUBJECT_PK);
+        assert_eq!(rows[0]["status"], "online");
+        assert_eq!(rows[0]["updated_at"], 1700000000u64);
+    }
+
+    #[test]
+    fn user_signed_presence_without_p_tag_reports_author() {
+        // Shape published by `buzz users set-presence` (build_presence_update):
+        // user-signed, no `p` tag, only a `status` tag.
+        let events = vec![serde_json::json!({
+            "pubkey": SUBJECT_PK,
+            "kind": 20001,
+            "content": "away",
+            "created_at": 1700000001,
+            "tags": [["status", "away"]],
+        })];
+        let rows = map_presence_events(&events);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["pubkey"], SUBJECT_PK);
+        assert_eq!(rows[0]["status"], "away");
+    }
+
+    #[test]
+    fn malformed_p_tag_falls_back_to_author() {
+        // A bare ["p"] tag with no value must not blank the pubkey.
+        let events = vec![serde_json::json!({
+            "pubkey": SUBJECT_PK,
+            "content": "online",
+            "created_at": 1700000002,
+            "tags": [["p"]],
+        })];
+        let rows = map_presence_events(&events);
+        assert_eq!(rows[0]["pubkey"], SUBJECT_PK);
     }
 }
