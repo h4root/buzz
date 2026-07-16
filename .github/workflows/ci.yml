@@ -42,6 +42,7 @@ jobs:
               - 'deny.toml'
               - '.github/workflows/ci.yml'
               - 'scripts/run-tests.sh'
+              - 'scripts/build-ffmpeg-lgpl.sh'
               - 'justfile'
             desktop:
               - 'desktop/**'
@@ -657,7 +658,7 @@ jobs:
         run: |
           cargo test --profile ci -p buzz-relay claim_ -- --ignored --nocapture
         env:
-          DATABASE_URL: postgres://buzz:buzz_dev@localhost:5432/buzz
+          DATABASE_URL: postgres://buzz:buzz_dev@localhost:5432/buzz # sadscan:disable np.postgres.1
       - name: NIP-ER reminder e2e
         # Feature e2e for NIP-ER (Event Reminders, kind:30300): write-path
         # validation, author-only read filtering, and scheduler delivery against
