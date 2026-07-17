@@ -308,20 +308,16 @@ fn persona_with_provider(
 // that the old create-time env baking silently blocked.
 
 use crate::managed_agents::env_vars::{live_persona_env, merged_user_env};
-use crate::managed_agents::persona_events::persona_snapshot;
 use std::collections::BTreeMap;
 
 /// Apply a persona snapshot onto a record, mirroring `create_managed_agent`:
-/// snapshotted prompt/model/provider/source_version are pinned, with the
-/// system_prompt unwrapped (the persona always carries one). `env_vars` is
-/// deliberately NOT touched — it stays agent overrides only.
+/// links the record to `persona.id`, then delegates the actual snapshot
+/// (prompt/model/provider/runtime/source_version) to the real production
+/// `apply_persona_snapshot` — so a change to that function's behavior is
+/// exercised by these tests instead of silently diverging from it.
 fn pin_persona(record: &mut ManagedAgentRecord, persona: &crate::managed_agents::AgentDefinition) {
-    let snapshot = persona_snapshot(persona);
     record.persona_id = Some(persona.id.clone());
-    record.system_prompt = snapshot.system_prompt;
-    record.model = snapshot.model;
-    record.provider = snapshot.provider;
-    record.persona_source_version = Some(snapshot.source_version);
+    crate::managed_agents::persona_events::apply_persona_snapshot(record, persona);
 }
 
 fn persona_v(
