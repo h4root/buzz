@@ -90,6 +90,18 @@ pub struct Ledger {
 }
 
 impl Ledger {
+    /// A ledger with no backing file — every operation is a silent no-op.
+    /// Used when `--resume-on-restart` is off: no disk I/O at all (an
+    /// existing file from a previous run when the flag was on is left
+    /// untouched, so toggling the flag back on later still resumes it).
+    pub fn disabled() -> Ledger {
+        Ledger {
+            path: None,
+            last_written: HashMap::new(),
+            unresolved: HashMap::new(),
+        }
+    }
+
     /// Load `<state_dir>/pending-turns-<agent_pubkey_prefix16>.json` and
     /// stage its contents for boot processing. Never fails: a missing
     /// file, unparseable JSON, unknown version, or uncreatable state dir

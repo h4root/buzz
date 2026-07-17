@@ -118,6 +118,33 @@ impl QueuedEvent {
         Self::new(channel_id, event, received_at, prompt_tag)
     }
 
+    /// Build a `QueuedEvent` for boot recovery (`EventQueue::import_recovered`)
+    /// or unresolved-record resolution (`EventQueue::admit_recovered`),
+    /// restoring exactly the fields that must survive a restart —
+    /// `admission_seq`/`enqueued_at_unix`/`cap_exempt` verbatim from the
+    /// ledger record, `restart_recovery: true` since a recovered event is
+    /// never a live admission. `received_at` is stamped fresh (in-process
+    /// fairness only; never persisted).
+    pub fn from_recovered(
+        channel_id: Uuid,
+        event: Event,
+        prompt_tag: String,
+        admission_seq: u64,
+        enqueued_at_unix: u64,
+        cap_exempt: bool,
+    ) -> Self {
+        QueuedEvent {
+            channel_id,
+            event,
+            received_at: Instant::now(),
+            prompt_tag,
+            admission_seq,
+            enqueued_at_unix,
+            restart_recovery: true,
+            cap_exempt,
+        }
+    }
+
     fn into_batch_event(self) -> BatchEvent {
         BatchEvent {
             event: self.event,

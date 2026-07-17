@@ -15,6 +15,7 @@ mod usage;
 pub use usage::TurnUsage;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,6 +36,7 @@ use config::{
 };
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
+use ledger::Ledger;
 use nostr::{PublicKey, ToBech32};
 use pool::{
     AgentPool, ControlSignal, IdleSwitchResult, OwnedAgent, PromptContext, PromptOutcome,
@@ -1443,6 +1445,23 @@ async fn tokio_main() -> Result<()> {
     let mut queue =
         EventQueue::new(dedup_mode).with_in_flight_deadline(config.max_turn_duration_secs);
 
+    // Durable pending-turn ledger (auto-resume after restart). Disabled
+    // outright (`Ledger::disabled()`, no disk I/O) when the flag is off;
+    // otherwise loaded now so boot recovery can stage it before the main
+    // loop starts. See `boot_recover` below and
+    // `PLANS/AGENT_AUTO_RESUME_LEDGER.md`.
+    let agent_pubkey_hex = config.keys.public_key().to_hex();
+    let (mut ledger, staged_ledger) = if config.resume_on_restart {
+        let state_dir = config.state_dir.clone().unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(".buzz-acp")
+        });
+        Ledger::load(&state_dir, &agent_pubkey_hex, config.resume_ttl_secs)
+    } else {
+        (Ledger::disabled(), ledger::StagedLedger::default())
+    };
+
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -1652,7 +1671,9 @@ async fn tokio_main() -> Result<()> {
             // called on relay events or pool results, neither of which
             // arrive when the channel is silent.
             if queue.has_flushable_work() {
-                for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                for (channel_id, thread_tags) in
+                    dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
+                {
                     typing_channels.insert(channel_id, thread_tags);
                 }
             }
@@ -1688,7 +1709,9 @@ async fn tokio_main() -> Result<()> {
         // this, batches requeued during crash recovery sit idle until the
         // next relay event arrives — which can be minutes on quiet channels.
         if respawn_collected {
-            for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+            for (channel_id, thread_tags) in
+                dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
+            {
                 typing_channels.insert(channel_id, thread_tags);
             }
         }
@@ -2089,7 +2112,7 @@ async fn tokio_main() -> Result<()> {
                                 }
                             }
                             for (channel_id, thread_tags) in
-                                dispatch_pending(&mut pool, &mut queue, &ctx)
+                                dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
                             {
                                 typing_channels.insert(channel_id, thread_tags);
                             }
@@ -2115,7 +2138,7 @@ async fn tokio_main() -> Result<()> {
                     if queue.has_flushable_work() {
                         tracing::debug!("heartbeat_skipped_events");
                         for (channel_id, thread_tags) in
-                            dispatch_pending(&mut pool, &mut queue, &ctx)
+                            dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
                         {
                             typing_channels.insert(channel_id, thread_tags);
                         }
@@ -2213,7 +2236,9 @@ async fn tokio_main() -> Result<()> {
                 {
                     break;
                 }
-                for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                for (channel_id, thread_tags) in
+                    dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
+                {
                     typing_channels.insert(channel_id, thread_tags);
                 }
             }
@@ -2236,7 +2261,9 @@ async fn tokio_main() -> Result<()> {
                     tracing::error!("all agents dead — exiting");
                     break;
                 }
-                for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                for (channel_id, thread_tags) in
+                    dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
+                {
                     typing_channels.insert(channel_id, thread_tags);
                 }
             }
@@ -2353,7 +2380,9 @@ async fn tokio_main() -> Result<()> {
                 // tear down the in-flight task; on its completion the
                 // queue drains. We still try here in case the in-flight
                 // task has already returned.
-                for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                for (channel_id, thread_tags) in
+                    dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx)
+                {
                     typing_channels.insert(channel_id, thread_tags);
                 }
             }
@@ -2651,10 +2680,23 @@ fn try_native_steer(
 
 // ── dispatch_pending ──────────────────────────────────────────────────────────
 
+/// Drain every channel a public `&mut queue` mutator touched since the
+/// last call and persist each one's current recoverable set. This is the
+/// one sync rule the auto-resume ledger design relies on (see
+/// `PLANS/AGENT_AUTO_RESUME_LEDGER.md` §"Core principle") — call it after
+/// *every* public queue mutation so the durable mirror never drifts from
+/// the in-memory queue.
+fn sync_dirty(queue: &mut EventQueue, ledger: &mut Ledger) {
+    for channel_id in queue.take_dirty_channels() {
+        ledger.sync(channel_id, queue.recoverable_triggers(channel_id));
+    }
+}
+
 /// Flush queued work to available agents.
 fn dispatch_pending(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
+    ledger: &mut Ledger,
     ctx: &Arc<PromptContext>,
 ) -> Vec<(Uuid, ThreadTags)> {
     let mut dispatched_channels = Vec::new();
@@ -2739,6 +2781,7 @@ fn dispatch_pending(
         );
         dispatched_channels.push((channel_id, typing_scope));
     }
+    sync_dirty(queue, ledger);
     tracing::debug!(
         dispatched = dispatched_channels.len(),
         queue_depth = queue.pending_channels(),
@@ -4196,6 +4239,9 @@ mod build_mcp_servers_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            resume_on_restart: true,
+            resume_ttl_secs: 0,
+            state_dir: None,
         }
     }
 
@@ -4361,6 +4407,9 @@ mod error_outcome_emission_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            resume_on_restart: true,
+            resume_ttl_secs: 0,
+            state_dir: None,
         }
     }
 
