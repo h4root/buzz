@@ -154,7 +154,7 @@ test.describe("welcome and channel agent entry points", () => {
       .click();
     await page.getByLabel("Custom model ID").fill("claude-opus-4-5");
     await page
-      .getByLabel("API Key", { exact: true })
+      .getByTestId("persona-provider-api-key")
       .fill("sk-test-api-key-for-e2e");
     await expect(page.getByTestId("persona-dialog-submit")).toBeEnabled();
     await page.getByTestId("persona-dialog-submit").click();

@@ -237,7 +237,7 @@ test("create agent supports parallelism and system prompt overrides", async ({
     .click();
   await page.getByLabel("Custom model ID").fill("claude-opus-4-5");
   await page
-    .getByLabel("API Key", { exact: true })
+    .getByTestId("persona-provider-api-key")
     .fill("sk-test-api-key-for-e2e");
 
   const advancedToggle = page.getByRole("button", {
