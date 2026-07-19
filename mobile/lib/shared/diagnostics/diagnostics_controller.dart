@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'sentry_config.dart';
 
 const diagnosticsConsentPreferenceKey = 'buzz_crash_reporting_consent';
+const _diagnosticsEnabledByDefault = true;
 
 typedef DiagnosticsLog = void Function(String message);
 
@@ -38,7 +39,8 @@ class DiagnosticsController extends ChangeNotifier {
        _crashReporter = crashReporter,
        _log = log ?? debugPrint,
        _consentGranted =
-           preferences.getBool(diagnosticsConsentPreferenceKey) ?? false;
+           preferences.getBool(diagnosticsConsentPreferenceKey) ??
+           _diagnosticsEnabledByDefault;
 
   final SharedPreferences _preferences;
   final SentryConfig _config;

@@ -108,19 +108,16 @@ class SettingsPage extends HookConsumerWidget {
                   ],
                 ),
 
-                // Diagnostics
+                // Crash reporting
                 AppListSection(
-                  label: 'Diagnostics',
                   children: [
                     AppListRow(
                       icon: LucideIcons.activity,
-                      title: 'Share Crash Reports',
+                      title: 'Share crash reports',
                       subtitle: diagnostics.isConfigured
-                          ? 'Send crash details to help improve Buzz. Reports '
-                                'do not include screenshots, view hierarchy, '
-                                'breadcrumbs, or performance traces.'
+                          ? 'Sent anonymously to help fix problems.'
                           : 'Crash reporting is unavailable in this build.',
-                      subtitleMaxLines: 4,
+                      subtitleMaxLines: 2,
                       trailing: Switch.adaptive(
                         value: diagnostics.consentGranted,
                         onChanged:

@@ -30,30 +30,54 @@ void main() {
     );
   }
 
-  test(
-    'defaults consent to false and does not initialize at startup',
-    () async {
-      final controller = await createController();
+  test('missing preference defaults reporting on for first installs', () async {
+    final controller = await createController();
 
-      await controller.applyStartupConsent();
+    await controller.applyStartupConsent();
 
-      expect(controller.consentGranted, isFalse);
-      expect(reporter.initializeCalls, 0);
-      expect(reporter.closeCalls, 0);
-      expect(
-        logs,
-        contains(
-          'Diagnostics disabled: user consent is off; Sentry not initialized.',
-        ),
-      );
-    },
-  );
-
-  test('empty DSN prevents initialization even with stored consent', () async {
-    final controller = await createController(
-      storedValues: {diagnosticsConsentPreferenceKey: true},
-      dsn: '   ',
+    expect(controller.consentGranted, isTrue);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isNull);
+    expect(reporter.initializeCalls, 1);
+    expect(reporter.closeCalls, 0);
+    expect(
+      logs,
+      contains('Diagnostics enabled: Sentry initialized after user consent.'),
     );
+  });
+
+  test('missing preference defaults reporting on after an upgrade', () async {
+    final controller = await createController(
+      storedValues: {'existing_preference_from_older_version': true},
+    );
+
+    await controller.applyStartupConsent();
+
+    expect(controller.consentGranted, isTrue);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isNull);
+    expect(reporter.initializeCalls, 1);
+  });
+
+  test('explicitly stored revocation remains off at startup', () async {
+    final controller = await createController(
+      storedValues: {diagnosticsConsentPreferenceKey: false},
+    );
+
+    await controller.applyStartupConsent();
+
+    expect(controller.consentGranted, isFalse);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isFalse);
+    expect(reporter.initializeCalls, 0);
+    expect(reporter.closeCalls, 0);
+    expect(
+      logs,
+      contains(
+        'Diagnostics disabled: user consent is off; Sentry not initialized.',
+      ),
+    );
+  });
+
+  test('empty DSN prevents initialization with default-on reporting', () async {
+    final controller = await createController(dsn: '   ');
 
     await controller.applyStartupConsent();
 
@@ -68,13 +92,16 @@ void main() {
     );
   });
 
-  test('cannot enable consent in an unconfigured build', () async {
-    final controller = await createController(dsn: '   ');
+  test('cannot opt in to an unconfigured build after revocation', () async {
+    final controller = await createController(
+      storedValues: {diagnosticsConsentPreferenceKey: false},
+      dsn: '   ',
+    );
 
     await expectLater(controller.setConsent(true), throwsA(isA<StateError>()));
 
     expect(controller.consentGranted, isFalse);
-    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isNull);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isFalse);
     expect(reporter.initializeCalls, 0);
     expect(
       logs,
@@ -101,8 +128,10 @@ void main() {
     );
   });
 
-  test('enabling persists consent and initializes immediately', () async {
-    final controller = await createController();
+  test('explicit opt-in persists and initializes immediately', () async {
+    final controller = await createController(
+      storedValues: {diagnosticsConsentPreferenceKey: false},
+    );
 
     await controller.setConsent(true);
 
@@ -146,7 +175,9 @@ void main() {
   });
 
   test('serializes concurrent consent changes', () async {
-    final controller = await createController();
+    final controller = await createController(
+      storedValues: {diagnosticsConsentPreferenceKey: false},
+    );
     reporter.initializeGate = Completer<void>();
 
     final enable = controller.setConsent(true);
@@ -163,8 +194,10 @@ void main() {
     expect(reporter.closeCalls, 1);
   });
 
-  test('initialization failure rolls back consent', () async {
-    final controller = await createController();
+  test('initialization failure preserves explicit revocation', () async {
+    final controller = await createController(
+      storedValues: {diagnosticsConsentPreferenceKey: false},
+    );
     reporter.initializeError = StateError('init failed');
 
     await expectLater(controller.setConsent(true), throwsA(isA<StateError>()));
@@ -189,7 +222,9 @@ void main() {
   });
 
   test('continues accepting changes after a failed operation', () async {
-    final controller = await createController();
+    final controller = await createController(
+      storedValues: {diagnosticsConsentPreferenceKey: false},
+    );
     reporter.initializeError = StateError('init failed');
 
     await expectLater(controller.setConsent(true), throwsA(isA<StateError>()));
@@ -201,8 +236,10 @@ void main() {
     expect(reporter.initializeCalls, 2);
   });
 
-  test('repeating the current value is idempotent', () async {
-    final controller = await createController();
+  test('repeating explicit values is idempotent', () async {
+    final controller = await createController(
+      storedValues: {diagnosticsConsentPreferenceKey: false},
+    );
 
     await controller.setConsent(false);
     await controller.setConsent(true);

@@ -12,11 +12,11 @@ void main() {
   late _RecordingCrashReporter reporter;
 
   Future<DiagnosticsController> createController({
-    bool consent = false,
+    bool? consent,
     String dsn = 'https://public@example.invalid/1',
   }) async {
     SharedPreferences.setMockInitialValues({
-      diagnosticsConsentPreferenceKey: consent,
+      diagnosticsConsentPreferenceKey: ?consent,
     });
     preferences = await SharedPreferences.getInstance();
     reporter = _RecordingCrashReporter();
@@ -50,23 +50,30 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('diagnostics switch enables crash reporting', (tester) async {
+  testWidgets('diagnostics switch defaults on with approved copy', (
+    tester,
+  ) async {
     final controller = await createController();
+    await controller.applyStartupConsent();
     await pumpSettings(tester, controller);
 
-    expect(find.text('DIAGNOSTICS'), findsOneWidget);
-    expect(find.text('Share Crash Reports'), findsOneWidget);
-    expect(
-      find.text(
-        'Send crash details to help improve Buzz. Reports do not include '
-        'screenshots, view hierarchy, breadcrumbs, or performance traces.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.textContaining('personal information'), findsNothing);
-    expect(find.textContaining('message text'), findsNothing);
+    expect(find.text('DIAGNOSTICS'), findsNothing);
+    expect(find.text('Share crash reports'), findsOneWidget);
+    expect(find.text('Sent anonymously to help fix problems.'), findsOneWidget);
+    expect(find.text('Share Crash Reports'), findsNothing);
     final toggle = tester.widget<Switch>(find.byType(Switch));
-    expect(toggle.value, isFalse);
+    expect(toggle.value, isTrue);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isNull);
+    expect(reporter.initializeCalls, 1);
+  });
+
+  testWidgets('explicit opt-in persists and initializes immediately', (
+    tester,
+  ) async {
+    final controller = await createController(consent: false);
+    await pumpSettings(tester, controller);
+
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
 
     await tester.tap(find.byType(Switch));
     await tester.pumpAndSettle();
@@ -91,13 +98,14 @@ void main() {
 
     expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
     expect(controller.consentGranted, isFalse);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isFalse);
     expect(reporter.closeCalls, 1);
   });
 
   testWidgets('reports and rolls back an initialization failure', (
     tester,
   ) async {
-    final controller = await createController();
+    final controller = await createController(consent: false);
     reporter.initializeError = StateError('init failed');
     await pumpSettings(tester, controller);
 
@@ -132,10 +140,34 @@ void main() {
     expect(reporter.initializeCalls, 0);
   });
 
-  testWidgets('diagnostics switch is disabled without a release DSN', (
+  testWidgets('default-on preference is visible without a release DSN', (
     tester,
   ) async {
     final controller = await createController(dsn: '');
+    await controller.applyStartupConsent();
+    await pumpSettings(tester, controller);
+
+    expect(
+      find.text('Crash reporting is unavailable in this build.'),
+      findsOneWidget,
+    );
+    final toggle = tester.widget<Switch>(find.byType(Switch));
+    expect(toggle.value, isTrue);
+    expect(toggle.onChanged, isNotNull);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isNull);
+    expect(reporter.initializeCalls, 0);
+
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+
+    expect(controller.consentGranted, isFalse);
+    expect(preferences.getBool(diagnosticsConsentPreferenceKey), isFalse);
+  });
+
+  testWidgets('explicit opt-out is disabled without a release DSN', (
+    tester,
+  ) async {
+    final controller = await createController(consent: false, dsn: '');
     await pumpSettings(tester, controller);
 
     expect(
