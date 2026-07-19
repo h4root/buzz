@@ -64,6 +64,7 @@ import { MobilePairingCard } from "./MobilePairingCard";
 import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { PreventSleepSettingsCard } from "./PreventSleepSettingsCard";
+import { ActiveAgentCommunitiesSettingsCard } from "./ActiveAgentCommunitiesSettingsCard";
 import { GlobalAgentConfigSettingsCard } from "./GlobalAgentConfigSettingsCard";
 import { HostedCommunitiesSettingsCard } from "./HostedCommunitiesSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
@@ -725,6 +726,7 @@ export function renderSettingsSection(
       return (
         <div className="space-y-12">
           <PreventSleepSettingsCard />
+          <ActiveAgentCommunitiesSettingsCard />
           <GlobalAgentConfigSettingsCard />
         </div>
       );
