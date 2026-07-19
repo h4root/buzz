@@ -48,6 +48,13 @@ pub enum DbError {
     /// A stored timestamp value could not be interpreted.
     #[error("invalid timestamp: {0}")]
     InvalidTimestamp(i64),
+
+    /// A transaction's COMMIT failed in a way that does not prove the
+    /// transaction aborted (e.g. the connection dropped while awaiting the
+    /// server's response). The write may or may not be durable; callers must
+    /// treat the outcome as unknown and retry idempotently.
+    #[error("commit outcome unknown: {0}")]
+    CommitOutcomeUnknown(String),
 }
 
 /// Convenience alias for `Result<T, DbError>`.

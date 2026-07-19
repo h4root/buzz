@@ -66,6 +66,10 @@ pub struct Config {
     pub max_connections: usize,
     /// Maximum number of concurrently executing message handlers.
     pub max_concurrent_handlers: usize,
+    /// Maximum plain event inserts coalesced into one group-commit
+    /// transaction (`BUZZ_WRITE_BATCH_MAX`). `0` disables batching and every
+    /// insert commits individually (the pre-batching behavior).
+    pub write_batch_max: usize,
     /// Per-connection outbound message buffer size (number of messages).
     pub send_buffer_size: usize,
     /// Maximum inbound WebSocket frame size in bytes.
@@ -428,6 +432,11 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1024);
+
+        let write_batch_max = std::env::var("BUZZ_WRITE_BATCH_MAX")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(buzz_db::batch::DEFAULT_MAX_BATCH);
 
         let send_buffer_size = std::env::var("BUZZ_SEND_BUFFER")
             .ok()
@@ -835,6 +844,7 @@ impl Config {
             pairing_relay_url,
             max_connections,
             max_concurrent_handlers,
+            write_batch_max,
             send_buffer_size,
             max_frame_bytes,
             slow_client_grace_limit,

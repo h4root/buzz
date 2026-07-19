@@ -537,6 +537,22 @@ impl ThreadMetadataOwned {
             broadcast: self.broadcast,
         }
     }
+
+    /// Owned clone for the group-commit batcher, which cannot borrow across
+    /// its queue.
+    pub fn to_batch_owned(&self) -> buzz_db::batch::ThreadMetadataOwned {
+        buzz_db::batch::ThreadMetadataOwned {
+            event_id: self.event_id.clone(),
+            event_created_at: self.event_created_at,
+            channel_id: self.channel_id,
+            parent_event_id: Some(self.parent_event_id.clone()),
+            parent_event_created_at: Some(self.parent_event_created_at),
+            root_event_id: Some(self.root_event_id.clone()),
+            root_event_created_at: Some(self.root_event_created_at),
+            depth: self.depth,
+            broadcast: self.broadcast,
+        }
+    }
 }
 
 /// Resolve NIP-10 thread ancestry from e-tags.
@@ -2308,17 +2324,43 @@ async fn ingest_event_inner(
             .await
             .map_err(|e| IngestError::Internal(format!("error: {e}")))?
     } else {
-        let thread_params = thread_meta.as_ref().map(|m| m.as_params());
-        match state
-            .db
-            .insert_event_with_thread_metadata(
-                tenant.community(),
-                &event,
-                channel_id,
-                thread_params,
-            )
-            .await
-        {
+        // Plain persistent event: route through the group-commit batcher when
+        // enabled so concurrent inserts share one COMMIT; semantics match the
+        // direct path exactly (see buzz_db::batch). Kind 9007 (channel
+        // create) stays direct: it is rare, carries the channel-compensation
+        // flow below, and the 0022 TTL trigger special-cases it. `None` from
+        // the batcher (disabled, never constructed, or worker gone) falls
+        // through to the direct path.
+        let mut batched = None;
+        if let Some(batcher) = &state.event_batcher {
+            if pre_created_channel.is_none() {
+                let batch_meta = thread_meta.as_ref().map(|m| m.to_batch_owned());
+                batched = batcher
+                    .insert_event_with_thread_metadata(
+                        tenant.community(),
+                        &event,
+                        channel_id,
+                        batch_meta,
+                    )
+                    .await;
+            }
+        }
+        let insert_result = match batched {
+            Some(result) => result,
+            None => {
+                let thread_params = thread_meta.as_ref().map(|m| m.as_params());
+                state
+                    .db
+                    .insert_event_with_thread_metadata(
+                        tenant.community(),
+                        &event,
+                        channel_id,
+                        thread_params,
+                    )
+                    .await
+            }
+        };
+        match insert_result {
             Ok(result) => result,
             Err(e) => {
                 // Compensate: if we pre-created a channel for kind:9007,

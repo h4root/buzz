@@ -436,6 +436,9 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// Database connection pool.
     pub db: Db,
+    /// Group-commit writer for plain event inserts. `None` when disabled
+    /// (`BUZZ_WRITE_BATCH_MAX=0`); ingest then uses the direct insert path.
+    pub event_batcher: Option<buzz_db::batch::EventWriteBatcher>,
     /// Redis pool for readiness health checks.
     pub redis_pool: deadpool_redis::Pool,
     /// Audit event service, absent when audit logging is disabled.
@@ -635,9 +638,12 @@ impl AppState {
             Arc::new(RedisNip98ReplayGuard::new(redis_pool.clone()));
         let admission_rate_limiter = Arc::new(RedisRateLimiter::new(redis_pool.clone()));
         let audit_enabled = audit_arc.is_some();
+        let event_batcher = (config.write_batch_max > 0)
+            .then(|| buzz_db::batch::EventWriteBatcher::spawn(db.clone(), config.write_batch_max));
         let state = Self {
             config: Arc::new(config),
             db,
+            event_batcher,
             redis_pool,
             audit: audit_arc,
             pubsub,

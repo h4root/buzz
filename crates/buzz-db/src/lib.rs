@@ -15,6 +15,8 @@ pub mod admin_moderation;
 pub mod api_token;
 /// Relay-scoped archived identity persistence (NIP-IA).
 pub mod archived_identities;
+/// Group-commit batching for plain event inserts.
+pub mod batch;
 /// Channel and membership persistence.
 pub mod channel;
 /// Direct message channel persistence.

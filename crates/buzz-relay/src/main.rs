@@ -978,6 +978,23 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
+                // Write-batcher coalescing counters (monotonic snapshots →
+                // absolute counters). Attempted vs. committed stay
+                // distinguishable: batch_* count only successful multi-event
+                // commits, aborted batches land in fallback_events.
+                if let Some(batcher) = &pool_state.event_batcher {
+                    let bs = batcher.stats();
+                    metrics::counter!("buzz_write_batch_commits_total").absolute(bs.batch_commits);
+                    metrics::counter!("buzz_write_batch_events_committed_total")
+                        .absolute(bs.batch_events_committed);
+                    metrics::counter!("buzz_write_batch_single_flushes_total")
+                        .absolute(bs.single_flushes);
+                    metrics::counter!("buzz_write_batch_fallback_events_total")
+                        .absolute(bs.fallback_events);
+                    metrics::counter!("buzz_write_batch_indeterminate_total")
+                        .absolute(bs.indeterminate_commits);
+                }
+
                 let rs = pool_state.redis_pool.status();
                 metrics::gauge!("buzz_redis_pool_available").set(rs.available as f64);
                 metrics::gauge!("buzz_redis_pool_size").set(rs.size as f64);
