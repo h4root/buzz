@@ -377,7 +377,7 @@ pub async fn list_managed_agents(app: AppHandle) -> Result<Vec<ManagedAgentSumma
             save_managed_agents(&app, &records)?;
         }
         for pubkey in &exited_pubkeys {
-            state.clear_session_cache(pubkey);
+            state.clear_agent_session_caches(pubkey);
         }
 
         let personas = load_personas(&app).unwrap_or_default();
@@ -452,7 +452,7 @@ pub async fn create_managed_agent(
             save_managed_agents(&app, &records)?;
         }
         for pubkey in &exited_pubkeys {
-            state.clear_session_cache(pubkey);
+            state.clear_agent_session_caches(pubkey);
         }
         if let Some(persona_id) = requested_persona_id.as_deref() {
             let personas = load_personas(&app)?;
@@ -523,7 +523,7 @@ pub async fn create_managed_agent(
             save_managed_agents(&app, &records)?;
         }
         for pubkey in &exited_pubkeys {
-            state.clear_session_cache(pubkey);
+            state.clear_agent_session_caches(pubkey);
         }
 
         // Guard against a duplicate pubkey appearing between phase 1 and phase 3
@@ -908,7 +908,7 @@ pub async fn start_managed_agent(
             save_managed_agents(&app, &records)?;
         }
         for pubkey in &exited_pubkeys {
-            state.clear_session_cache(pubkey);
+            state.clear_agent_session_caches(pubkey);
         }
 
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
@@ -1039,7 +1039,7 @@ pub async fn stop_managed_agent(
             save_managed_agents(&app, &records)?;
         }
         for pubkey in &exited_pubkeys {
-            state.clear_session_cache(pubkey);
+            state.clear_agent_session_caches(pubkey);
         }
 
         {
@@ -1053,7 +1053,7 @@ pub async fn stop_managed_agent(
             }
             stop_managed_agent_process(&app, record, &mut runtimes)?;
         }
-        state.clear_session_cache(&pubkey);
+        state.clear_agent_session_caches(&pubkey);
         save_managed_agents(&app, &records)?;
         let record = records
             .iter()
@@ -1097,7 +1097,7 @@ pub async fn delete_managed_agent(
                 save_managed_agents(&app, &records)?;
             }
             for pubkey in &exited_pubkeys {
-                state.clear_session_cache(pubkey);
+                state.clear_agent_session_caches(pubkey);
             }
 
             // Guard: reject deletion of deployed remote agents unless explicitly forced.
@@ -1120,7 +1120,7 @@ pub async fn delete_managed_agent(
             if let Some(record) = records.iter_mut().find(|record| record.pubkey == pubkey) {
                 stop_managed_agent_process(&app, record, &mut runtimes)?;
             }
-            state.clear_session_cache(&pubkey);
+            state.clear_agent_session_caches(&pubkey);
             let initial_len = records.len();
             records.retain(|record| record.pubkey != pubkey);
             if records.len() == initial_len {
