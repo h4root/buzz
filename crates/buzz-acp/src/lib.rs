@@ -1652,6 +1652,12 @@ async fn tokio_main() -> Result<()> {
         SteerAck(SteerAckEvent),
     }
 
+    // Boot-recovery wake: dispatch any recovered work immediately so a
+    // quiet harness does not wait for the first 30s maintenance cycle.
+    for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &mut ledger, &ctx) {
+        typing_channels.insert(channel_id, thread_tags);
+    }
+
     loop {
         if last_maintenance.elapsed() >= maintenance_interval {
             last_maintenance = std::time::Instant::now();
@@ -2818,9 +2824,12 @@ fn try_native_steer(
 const BOOT_RECOVERY_CHUNK_SIZE: usize = 100;
 
 /// Overall wall-clock budget for the boot-recovery REST fetch phase,
-/// regardless of ledger cardinality. Also the unresolved-barrier deadline
-/// (measured from boot commit) — see §"Unresolved-trigger lifecycle".
-const BOOT_RECOVERY_DEADLINE: Duration = Duration::from_secs(60);
+/// regardless of ledger cardinality.
+const BOOT_RECOVERY_FETCH_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Unresolved-barrier timeout measured from boot commit (after fetch
+/// reconciliation completes), not from the start of the fetch phase.
+const BOOT_RECOVERY_BARRIER_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Boot recovery (rev 6.1): stage → membership gate → TTL (already applied
 /// by `Ledger::load`) → chunked id-set fetch under one global deadline,
@@ -2831,7 +2840,7 @@ const BOOT_RECOVERY_DEADLINE: Duration = Duration::from_secs(60);
 /// design and its numbered edge cases.
 ///
 /// A no-op (immediate return) when the staged ledger has nothing to
-/// recover. Never blocks boot past `BOOT_RECOVERY_DEADLINE`: any trigger
+/// recover. Never blocks boot past `BOOT_RECOVERY_FETCH_DEADLINE`: any trigger
 /// not fetched by then is retained as unresolved rather than dropped.
 async fn boot_recover(
     queue: &mut EventQueue,
@@ -2863,7 +2872,7 @@ async fn boot_recover(
             "boot recovery: dropped ledger channel(s) no longer in this boot's membership"
         );
     }
-    let deadline = tokio::time::Instant::now() + BOOT_RECOVERY_DEADLINE;
+    let fetch_deadline = tokio::time::Instant::now() + BOOT_RECOVERY_FETCH_DEADLINE;
     let all_ids: Vec<String> = gated.iter().map(|(_, r)| r.event_id.clone()).collect();
     let by_id: HashMap<&str, &(Uuid, ledger::LedgerRecord)> = gated
         .iter()
@@ -2872,7 +2881,7 @@ async fn boot_recover(
 
     let mut fetched: HashMap<String, nostr::Event> = HashMap::new();
     'chunks: for chunk in all_ids.chunks(BOOT_RECOVERY_CHUNK_SIZE) {
-        if tokio::time::Instant::now() >= deadline {
+        if tokio::time::Instant::now() >= fetch_deadline {
             tracing::warn!("boot recovery: global fetch deadline reached — remaining triggers unresolved-retained");
             break 'chunks;
         }
@@ -2884,7 +2893,7 @@ async fn boot_recover(
             continue;
         }
         let filter = nostr::Filter::new().ids(ids);
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let remaining = fetch_deadline.saturating_duration_since(tokio::time::Instant::now());
         let query = tokio::time::timeout(remaining, rest.query(std::slice::from_ref(&filter)));
         let response = match query.await {
             Ok(Ok(v)) => v,
@@ -2944,12 +2953,35 @@ async fn boot_recover(
         }
     }
 
+    // Epoch promotion: compute per channel from ALL gated records before
+    // the fetch split. If no record in the channel's full snapshot is
+    // exempt, every record (fetched and unresolved) promotes to exempt.
+    let mut promote_channels: HashSet<Uuid> = HashSet::new();
+    {
+        let mut has_exempt: HashMap<Uuid, bool> = HashMap::new();
+        for (channel_id, record) in &gated {
+            let entry = has_exempt.entry(*channel_id).or_insert(false);
+            if record.cap_exempt {
+                *entry = true;
+            }
+        }
+        for (channel_id, exempt) in has_exempt {
+            if !exempt {
+                promote_channels.insert(channel_id);
+            }
+        }
+    }
+
     // Restore fetched events per channel via import_recovered, in global
-    // admission_seq order; unfetched ids stay unresolved-retained.
+    // admission_seq order; unfetched ids stay unresolved-retained. The
+    // settled cap class comes from the whole-snapshot promotion above.
     let mut per_channel: HashMap<Uuid, Vec<QueuedEvent>> = HashMap::new();
     let mut max_seq: u64 = 0;
-    for (channel_id, record) in gated {
+    for (channel_id, mut record) in gated {
         max_seq = max_seq.max(record.admission_seq);
+        if promote_channels.contains(&channel_id) {
+            record.cap_exempt = true;
+        }
         match fetched.remove(&record.event_id) {
             Some(event) => {
                 recovered_suppression.insert(record.event_id.clone());
@@ -2975,11 +3007,15 @@ async fn boot_recover(
 
     // Register the unresolved ordering barrier per channel (R6-F1) before
     // the single commit, so the queue's flush gate is armed from boot.
+    // The barrier deadline starts NOW (after fetch reconciliation), not
+    // from the start of the fetch phase — a slow bridge must not consume
+    // the resolution window.
+    let barrier_deadline = std::time::Instant::now() + BOOT_RECOVERY_BARRIER_DEADLINE;
     for channel_id in ledger.unresolved_channels() {
         queue.set_unresolved_barrier(
             channel_id,
             ledger.unresolved_seqs(channel_id),
-            deadline.into(),
+            barrier_deadline,
         );
     }
 
@@ -6733,7 +6769,7 @@ mod boot_recovery_integration_tests {
         let elapsed = start.elapsed();
 
         assert!(
-            elapsed < Duration::from_secs(BOOT_RECOVERY_DEADLINE.as_secs() + 15),
+            elapsed < Duration::from_secs(BOOT_RECOVERY_FETCH_DEADLINE.as_secs() + 15),
             "boot_recover must respect its deadline, took {elapsed:?}"
         );
 

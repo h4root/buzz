@@ -420,8 +420,15 @@ pub struct CliArgs {
 
     /// Resume in-progress work on restart (kill -9, crash, manual restart,
     /// or app update) by replaying a durable pending-turn ledger on boot.
-    /// On by default. See `PLANS/AGENT_AUTO_RESUME_LEDGER.md`.
-    #[arg(long, env = "BUZZ_ACP_RESUME_ON_RESTART", default_value_t = true)]
+    /// On by default. `--resume-on-restart=false` disables.
+    #[arg(
+        long,
+        env = "BUZZ_ACP_RESUME_ON_RESTART",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+    )]
     pub resume_on_restart: bool,
 
     /// TTL (seconds) for resume ledger entries, by original admission time.
