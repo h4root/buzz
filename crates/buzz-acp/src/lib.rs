@@ -2284,6 +2284,9 @@ async fn tokio_main() -> Result<()> {
                     Some(&ctx.rest_client),
                 ) == LoopAction::Exit
                 {
+                    // Sync before exit: complete_batch dirtied the queue but
+                    // the exit bypasses dispatch_pending's sync call (P3-F2).
+                    sync_dirty(&mut queue, &mut ledger);
                     break;
                 }
                 if drain_ready_join_results(
@@ -2299,6 +2302,9 @@ async fn tokio_main() -> Result<()> {
                     observer.clone(),
                 ) == LoopAction::Exit
                 {
+                    // Sync before exit: classify dirtied the queue but the
+                    // exit bypasses dispatch_pending's sync call (P3-F2).
+                    sync_dirty(&mut queue, &mut ledger);
                     break;
                 }
                 for (channel_id, thread_tags) in
@@ -2324,6 +2330,9 @@ async fn tokio_main() -> Result<()> {
                 );
                 if pool.live_count() == 0 && !any_respawn_in_flight(&crash_history) {
                     tracing::error!("all agents dead — exiting");
+                    // Sync before exit: complete_batch dirtied the queue but
+                    // the exit bypasses dispatch_pending's sync call (P3-F2).
+                    sync_dirty(&mut queue, &mut ledger);
                     break;
                 }
                 for (channel_id, thread_tags) in
@@ -2598,13 +2607,14 @@ fn admit_live_event(
         (false, true)
     } else if let Some(unresolved) = ledger.find_unresolved(channel_id, &event_id_hex) {
         // Unresolved record resolving: build a recovered QueuedEvent with
-        // the ledger's original seq/timestamp/cap_exempt, admit at seq
-        // position, then consume the ledger entry (consume-after-ownership
-        // ordering).
+        // the ledger's original seq/timestamp/cap_exempt/prompt_tag.
+        // The persisted `prompt_tag` is used rather than the live match's
+        // tag — a config or rule-priority change between admission and
+        // restart must not alter recovery framing (P3-F4).
         let recovered = QueuedEvent::from_recovered(
             channel_id,
             event,
-            prompt_tag,
+            unresolved.prompt_tag.clone(),
             unresolved.admission_seq,
             unresolved.enqueued_at_unix,
             unresolved.cap_exempt,
@@ -2620,7 +2630,11 @@ fn admit_live_event(
             std::time::Instant::now(),
             prompt_tag,
         ));
-        (ok, false)
+        // While the channel has an active unresolved barrier the steer
+        // side-door is suppressed: the fresh live event queues normally and
+        // waits behind the barrier hole rather than bypassing it (P3-F1).
+        let skip_steer = queue.has_active_unresolved_barrier(channel_id);
+        (ok, skip_steer)
     }
 }
 
@@ -8162,5 +8176,296 @@ mod boot_recovery_integration_tests {
         );
 
         server.abort();
+    }
+
+    // ── P3-F1: barrier-aware skip_steer ─────────────────────────────────
+
+    #[tokio::test]
+    async fn test_live_event_skips_steer_while_barrier_armed() {
+        // P3-F1 fix: a fresh live event for a channel that has an active
+        // unresolved barrier must return skip_steer = true (queue normally
+        // and wait behind the hole) rather than bypassing it through native
+        // steer.
+        //
+        // Red-on-old: before the fix, `admit_live_event`'s ordinary branch
+        // always returned `(ok, false)` — skip_steer was never set for
+        // ordinary pushes, so the assertion `skip_steer == true` failed.
+        let keys = Keys::generate();
+        let ch = Uuid::new_v4();
+        let event_c = make_channel_event(&keys, ch, "fresh-C");
+
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ledger, _) = Ledger::load(dir.path(), "test_pubkey", 0);
+        let mut suppression: HashSet<String> = HashSet::new();
+
+        // Arm a barrier for `ch` — simulates boot_recover registering an
+        // unfetched hole at seq 1.
+        let seqs = std::collections::BTreeSet::from([1u64]);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        queue.set_unresolved_barrier(ch, seqs, deadline);
+
+        // Fresh live event C arrives above the hole.
+        let (accepted, skip_steer) = admit_live_event(
+            &mut queue,
+            &mut ledger,
+            &mut suppression,
+            ch,
+            event_c.clone(),
+            "mention".into(),
+        );
+
+        assert!(
+            accepted,
+            "fresh event above barrier must be admitted into queue"
+        );
+        assert!(
+            skip_steer,
+            "fresh live event must skip native steer while the channel's barrier is armed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_live_event_steers_after_barrier_expires() {
+        // Companion: once the barrier has been cleared (expired or all
+        // unresolved seqs resolved), ordinary live events must NOT skip steer.
+        //
+        // Closes the mutation gap where always returning skip_steer = true
+        // would slip through — this verifies the "no barrier → steer allowed"
+        // half of the invariant.
+        let keys = Keys::generate();
+        let ch = Uuid::new_v4();
+        let event_a = make_channel_event(&keys, ch, "fresh-D");
+
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ledger, _) = Ledger::load(dir.path(), "test_pubkey", 0);
+        let mut suppression: HashSet<String> = HashSet::new();
+
+        // Arm and immediately expire the barrier.
+        let seqs = std::collections::BTreeSet::from([1u64]);
+        let past_deadline = Instant::now() - Duration::from_secs(1);
+        queue.set_unresolved_barrier(ch, seqs, past_deadline);
+        queue.expire_due_unresolved_barriers(Instant::now());
+        assert!(
+            !queue.has_active_unresolved_barrier(ch),
+            "barrier must be cleared before the assertion below"
+        );
+
+        let (accepted, skip_steer) = admit_live_event(
+            &mut queue,
+            &mut ledger,
+            &mut suppression,
+            ch,
+            event_a.clone(),
+            "mention".into(),
+        );
+
+        assert!(accepted, "ordinary live event must be admitted");
+        assert!(
+            !skip_steer,
+            "ordinary live event must take the native steer path when no barrier is armed"
+        );
+    }
+
+    // ── P3-F2: sync-before-exit ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_exit_via_handle_prompt_result_syncs_ledger_before_break() {
+        // P3-F2 fix: when handle_prompt_result returns LoopAction::Exit
+        // (circuit open, all agents dead) the main loop must call
+        // sync_dirty before breaking — otherwise the in-flight triggers
+        // dirtied by complete_batch are never persisted, and the next boot
+        // resurrects work that was deliberately terminated.
+        //
+        // The test models the fixed main-loop path: dispatch in-flight,
+        // force Exit return from handle_prompt_result, call sync_dirty
+        // (what the fixed break site now does), reload. Zero triggers expected.
+        //
+        // Red-on-old (without the sync_dirty call before break): the
+        // classify_and_complete_batch call inside handle_prompt_result clears
+        // in_flight_channels but the ledger is NOT synced — reload returns
+        // the original in-flight trigger.
+        let keys = Keys::generate();
+        let ch = Uuid::new_v4();
+        let event_a = make_channel_event(&keys, ch, "msg");
+
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ledger, _) = Ledger::load(dir.path(), "test_pubkey", 0);
+
+        // Dispatch a real in-flight batch.
+        let mut pool = dispatch_one_in_flight(&mut queue, &mut ledger, ch, &event_a).await;
+        assert!(
+            !queue.recoverable_triggers(ch).is_empty(),
+            "setup: in-flight trigger must be present"
+        );
+
+        // Force the circuit open.
+        let config = test_config();
+        let mut crash_history = vec![SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        }];
+        for _ in 0..CIRCUIT_BREAKER_THRESHOLD {
+            crash_history[0].record_crash();
+        }
+        assert!(
+            matches!(crash_history[0].record_crash(), CrashVerdict::CircuitOpen),
+            "setup: circuit must be open"
+        );
+
+        let agent = dummy_agent(0).await;
+        let (respawn_tx, _rx) = mpsc::channel(8);
+        let mut respawn_tasks = tokio::task::JoinSet::new();
+        let result = PromptResult {
+            agent,
+            source: PromptSource::Channel(ch),
+            turn_id: "t".into(),
+            outcome: PromptOutcome::Timeout(TimeoutKind::Hard {
+                recently_active: false,
+            }),
+            batch: None,
+        };
+
+        let mut heartbeat_in_flight = false;
+        let removed_channels = HashSet::new();
+
+        let action = handle_prompt_result(
+            &mut pool,
+            &mut queue,
+            &config,
+            result,
+            &mut heartbeat_in_flight,
+            &removed_channels,
+            &mut crash_history,
+            &respawn_tx,
+            &mut respawn_tasks,
+            None,
+            None,
+        );
+
+        assert!(
+            action == LoopAction::Exit,
+            "setup: circuit-open exit must return Exit"
+        );
+
+        // The fix: sync_dirty called before break (P3-F2).
+        sync_dirty(&mut queue, &mut ledger);
+
+        let (_, staged) = Ledger::load(dir.path(), "test_pubkey", 0);
+        assert!(
+            staged.channels.is_empty(),
+            "after circuit-open exit with sync, reload must find zero recovered triggers (got: {:?})",
+            staged.channels
+        );
+    }
+
+    // ── P3-F3: persist returns success; last_written advances only on success
+
+    #[test]
+    fn test_failed_persist_does_not_advance_last_written_allowing_retry() {
+        // P3-F3 fix: when persist fails (temp-file path blocked),
+        // `last_written` must NOT be advanced. The skip-identical check
+        // (P2-F3) compares against `last_written`; if a failed write is
+        // recorded as success, the healing retry is silently skipped.
+        //
+        // Red-on-old: sync() advanced last_written before calling persist(),
+        // so the second identical sync() was suppressed even though the first
+        // write never reached disk.
+        let ch = Uuid::new_v4();
+        let keys = Keys::generate();
+        let event_a = make_channel_event(&keys, ch, "msg");
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ledger, _) = Ledger::load(dir.path(), "test_pubkey", 0);
+
+        // Block the .tmp path — must use the actual ledger filename (prefix is
+        // the full hex string, up to 16 chars; "test_pubkey" is only 11 chars).
+        let prefix: String = "test_pubkey".chars().take(16).collect();
+        let ledger_path = dir.path().join(format!("pending-turns-{prefix}.json"));
+        let tmp_path = {
+            let mut s = ledger_path.as_os_str().to_os_string();
+            s.push(".tmp");
+            std::path::PathBuf::from(s)
+        };
+        std::fs::create_dir_all(&tmp_path).expect("create blocker dir");
+
+        let trigger = crate::queue::RecoverableTrigger {
+            event_id: event_a.id.to_hex(),
+            prompt_tag: "mention".into(),
+            admission_seq: 1,
+            enqueued_at_unix: 1000,
+            cap_exempt: false,
+        };
+
+        // First sync: write fails (path is a directory).
+        ledger.sync(ch, vec![trigger.clone()]);
+
+        // Remove blocker, retry with identical data — must succeed now.
+        std::fs::remove_dir_all(&tmp_path).expect("remove blocker");
+        ledger.sync(ch, vec![trigger.clone()]);
+
+        let (_, staged) = Ledger::load(dir.path(), "test_pubkey", 0);
+        assert_eq!(
+            staged.channels.len(),
+            1,
+            "after unblocked retry sync, ledger file must contain the channel record"
+        );
+        let records = staged.channels.get(&ch).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].event_id, event_a.id.to_hex());
+    }
+
+    // ── P3-F4: persisted prompt_tag through from_recovered ───────────────
+
+    #[tokio::test]
+    async fn test_unresolved_resolution_uses_persisted_prompt_tag_not_live_tag() {
+        // P3-F4 fix: when a live event resolves an unresolved ledger record,
+        // the recovered QueuedEvent must use the *persisted* prompt_tag from
+        // the LedgerRecord, not the live relay delivery's tag.
+        //
+        // Red-on-old: admit_live_event passed the live `prompt_tag` argument
+        // to from_recovered — a live delivery with a different tag would
+        // silently override the persisted one.
+        let keys = Keys::generate();
+        let ch = Uuid::new_v4();
+        let event_a = make_channel_event(&keys, ch, "msg");
+
+        let record_a = LedgerRecord {
+            event_id: event_a.id.to_hex(),
+            prompt_tag: "original".into(),
+            admission_seq: 1,
+            enqueued_at_unix: 1001,
+            cap_exempt: false,
+        };
+
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ledger, _) = Ledger::load(dir.path(), "test_pubkey", 0);
+        let mut suppression: HashSet<String> = HashSet::new();
+
+        ledger.add_unresolved(ch, record_a);
+
+        // Live delivery arrives with a different tag.
+        let (accepted, skip_steer) = admit_live_event(
+            &mut queue,
+            &mut ledger,
+            &mut suppression,
+            ch,
+            event_a.clone(),
+            "new".into(), // live delivery tag — must NOT win
+        );
+
+        assert!(accepted, "resolving event must be admitted");
+        assert!(skip_steer, "resolving event skips native steer");
+
+        let triggers = queue.recoverable_triggers(ch);
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(
+            triggers[0].prompt_tag, "original",
+            "recovered trigger must retain the persisted prompt_tag, not the live-delivery tag"
+        );
     }
 }

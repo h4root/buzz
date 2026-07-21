@@ -586,6 +586,14 @@ impl EventQueue {
             .insert(channel_id, UnresolvedBarrier { seqs, deadline });
     }
 
+    /// Returns `true` if `channel_id` has an active (non-expired) unresolved
+    /// barrier. Used by `admit_live_event` to suppress native steer while the
+    /// barrier is armed — a fresh live event must queue behind the hole rather
+    /// than bypassing it through the steer side-door.
+    pub fn has_active_unresolved_barrier(&self, channel_id: Uuid) -> bool {
+        self.unresolved_barriers.contains_key(&channel_id)
+    }
+
     /// Earliest active barrier deadline across all channels, or `None` when
     /// no barrier is armed. The main `select!`'s `tokio::time::Sleep` arm
     /// is reset from this whenever the barrier set changes (rev 6.1).

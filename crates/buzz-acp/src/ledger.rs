@@ -246,9 +246,15 @@ impl Ledger {
     /// channel drain, because a removed channel never dirties again.
     pub fn invalidate_channel(&mut self, channel_id: Uuid) {
         let had_unresolved = self.unresolved.remove(&channel_id).is_some();
-        let had_written = self.last_written.remove(&channel_id).is_some();
+        let had_written = self.last_written.contains_key(&channel_id);
         if had_unresolved || had_written {
-            self.persist();
+            // Stage the removal in a copy; only commit if persist succeeds
+            // (P3-F3: last_written advances only on successful write).
+            let mut candidate = self.last_written.clone();
+            candidate.remove(&channel_id);
+            if self.persist_candidate(&candidate) {
+                self.last_written = candidate;
+            }
         }
     }
 
@@ -270,12 +276,17 @@ impl Ledger {
         if !changed {
             return;
         }
+        // Stage the update in a candidate copy; only commit to last_written
+        // after a successful disk write (P3-F3).
+        let mut candidate = self.last_written.clone();
         if records.is_empty() {
-            self.last_written.remove(&channel_id);
+            candidate.remove(&channel_id);
         } else {
-            self.last_written.insert(channel_id, records);
+            candidate.insert(channel_id, records);
         }
-        self.persist();
+        if self.persist_candidate(&candidate) {
+            self.last_written = candidate;
+        }
     }
 
     /// Boot-only: commit the single transactional snapshot computed as
@@ -293,8 +304,10 @@ impl Ledger {
                 channels.insert(channel_id, records);
             }
         }
-        self.last_written = channels;
-        self.persist();
+        // Only advance last_written if the disk write succeeds (P3-F3).
+        if self.persist_candidate(&channels) {
+            self.last_written = channels;
+        }
     }
 
     fn merge_with_unresolved(
@@ -310,21 +323,23 @@ impl Ledger {
         records
     }
 
-    /// Atomic write: serialize to a temp file in the same directory, then
-    /// rename over the real path. A crash mid-write leaves the previous
-    /// file intact; a crash after the rename leaves the new one intact —
-    /// there is no partially-written state either way.
-    fn persist(&self) {
-        let Some(path) = &self.path else { return };
+    /// Atomic write: serialize `candidate` to a temp file in the same
+    /// directory, then rename over the real path. Returns `true` on success.
+    /// A crash mid-write leaves the previous file intact; a crash after the
+    /// rename leaves the new one intact — there is no partially-written state.
+    /// The caller is responsible for advancing `last_written` only on success
+    /// (P3-F3).
+    fn persist_candidate(&self, candidate: &HashMap<Uuid, Vec<LedgerRecord>>) -> bool {
+        let Some(path) = &self.path else { return true }; // no-path = in-memory only
         let file = LedgerFile {
             version: LEDGER_VERSION,
-            channels: self.last_written.clone(),
+            channels: candidate.clone(),
         };
         let json = match serde_json::to_vec_pretty(&file) {
             Ok(j) => j,
             Err(e) => {
                 tracing::error!(error = %e, "failed to serialize resume ledger — write skipped");
-                return;
+                return false;
             }
         };
         let mut tmp_name = path.as_os_str().to_os_string();
@@ -332,11 +347,13 @@ impl Ledger {
         let tmp_path = PathBuf::from(tmp_name);
         if let Err(e) = std::fs::write(&tmp_path, &json) {
             tracing::error!(path = %tmp_path.display(), error = %e, "failed to write resume ledger temp file");
-            return;
+            return false;
         }
         if let Err(e) = std::fs::rename(&tmp_path, path) {
             tracing::error!(path = %path.display(), error = %e, "failed to rename resume ledger into place");
+            return false;
         }
+        true
     }
 }
 
