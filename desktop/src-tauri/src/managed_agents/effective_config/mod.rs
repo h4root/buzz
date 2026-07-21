@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use super::global_config::GlobalAgentConfig;
+use super::relay_mesh::{RELAY_MESH_AUTO_MODEL_ID, RELAY_MESH_PROVIDER_ID};
 use super::types::{AgentDefinition, ManagedAgentRecord};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -22,6 +23,30 @@ pub struct EffectiveAgentConfig {
     pub model: ResolvedField<String>,
     pub provider: ResolvedField<String>,
     pub system_prompt: ResolvedField<String>,
+}
+
+impl EffectiveAgentConfig {
+    /// The relay-mesh model id this config resolves to, or `None` when the
+    /// effective provider isn't relay-mesh.
+    ///
+    /// Derived from the SAME `model`/`provider` this struct already carries —
+    /// the identical resolution spawn's `apply_relay_mesh_env` consults — so a
+    /// mesh preflight built from this can never disagree with what spawn does.
+    /// Mirrors `apply_relay_mesh_env`'s own blank-model-defaults-to-"auto" rule.
+    pub fn relay_mesh_model_id(&self) -> Option<String> {
+        if self.provider.value.as_deref().map(str::trim) != Some(RELAY_MESH_PROVIDER_ID) {
+            return None;
+        }
+        Some(
+            self.model
+                .value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(RELAY_MESH_AUTO_MODEL_ID)
+                .to_string(),
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +162,26 @@ pub fn resolve_effective_model_provider_pair(
 ) -> Option<(Option<String>, Option<String>)> {
     match resolve_effective_config(record, definitions, global) {
         EffectiveConfigResult::Resolved(cfg) => Some((cfg.model.value, cfg.provider.value)),
+        EffectiveConfigResult::OrphanedInstance { .. } => None,
+    }
+}
+
+/// The relay-mesh preflight decision for `record`, resolved the same way
+/// spawn resolves its mesh env: through `resolve_effective_config` (which
+/// folds in the definition → global fallback), never through the record's
+/// own `provider`/`model`/`relay_mesh` bytes.
+///
+/// `None` covers both "not a mesh agent" and "orphaned instance" — an orphan
+/// never spawns (see `require_resolved`), so it never needs a mesh preflight
+/// either; the caller's own orphan handling downstream is unaffected, this
+/// just avoids tripping mesh bootstrap for a start that will be refused.
+pub fn resolve_effective_relay_mesh_model_id(
+    record: &ManagedAgentRecord,
+    definitions: &[AgentDefinition],
+    global: &GlobalAgentConfig,
+) -> Option<String> {
+    match resolve_effective_config(record, definitions, global) {
+        EffectiveConfigResult::Resolved(cfg) => cfg.relay_mesh_model_id(),
         EffectiveConfigResult::OrphanedInstance { .. } => None,
     }
 }

@@ -422,3 +422,101 @@ fn morgans_sequence_inherit_explicit_inherit() {
     assert_eq!(cfg3.provider.value.as_deref(), Some("anthropic"));
     assert_eq!(cfg3.provider.source, ConfigSource::Global);
 }
+
+// ── relay-mesh preflight resolution (Wes review 2 on #1968) ──
+//
+// Both regressions below reproduce the exact defects: the preflight must
+// key off `resolve_effective_config`'s resolution — the same one spawn's
+// mesh env consults — not the record's own `provider`/`model` bytes.
+
+#[test]
+fn relay_mesh_model_id_none_for_non_mesh_config() {
+    let rec = record(Some("d1"), None, None, None);
+    let defs = vec![definition("d1", Some("m"), Some("anthropic"), "")];
+    let g = global(None, None);
+
+    assert_eq!(resolve_effective_relay_mesh_model_id(&rec, &defs, &g), None);
+}
+
+#[test]
+fn relay_mesh_model_id_defaults_to_auto_when_model_blank() {
+    let rec = record(Some("d1"), None, None, None);
+    let defs = vec![definition("d1", None, Some(RELAY_MESH_PROVIDER_ID), "")];
+    let g = global(None, None);
+
+    assert_eq!(
+        resolve_effective_relay_mesh_model_id(&rec, &defs, &g).as_deref(),
+        Some(RELAY_MESH_AUTO_MODEL_ID)
+    );
+}
+
+/// Switch-away regression (Wes finding 1): a linked definition that used to
+/// be relay-mesh but was edited to another provider must NOT trigger the mesh
+/// preflight — even though the record's own stale bytes still say
+/// `provider: relay-mesh`. The old `relay_mesh_config(record)` sniff read
+/// those stale record bytes directly and returned Some; the resolver-driven
+/// decision must read the definition's CURRENT provider and return None.
+#[test]
+fn switch_away_from_relay_mesh_clears_preflight_despite_stale_record_bytes() {
+    let rec = record(Some("d1"), Some("auto"), Some(RELAY_MESH_PROVIDER_ID), None);
+    let defs = vec![definition(
+        "d1",
+        Some("claude-opus-4-6"),
+        Some("anthropic"),
+        "",
+    )];
+    let g = global(None, None);
+
+    assert_eq!(
+        resolve_effective_relay_mesh_model_id(&rec, &defs, &g),
+        None,
+        "definition switched away from relay-mesh — no mesh preflight should fire"
+    );
+}
+
+/// Global-inheritance regression (Wes finding 2): a blank linked definition
+/// falling through to a relay-mesh GLOBAL default must trigger the mesh
+/// preflight, even though the record carries `provider: None` and no legacy
+/// env — all three of the old `relay_mesh_config` branches would miss here.
+#[test]
+fn global_relay_mesh_default_triggers_preflight_for_blank_definition() {
+    let rec = record(Some("d1"), None, None, None);
+    let defs = vec![definition("d1", None, None, "")];
+    let g = global(Some("Qwen3"), Some(RELAY_MESH_PROVIDER_ID));
+
+    assert_eq!(
+        resolve_effective_relay_mesh_model_id(&rec, &defs, &g).as_deref(),
+        Some("Qwen3"),
+        "global relay-mesh default must trigger the mesh preflight for a blank definition"
+    );
+}
+
+/// Symmetric case: a definition-less (legacy) instance inheriting the global
+/// relay-mesh default must also trigger the preflight.
+#[test]
+fn global_relay_mesh_default_triggers_preflight_for_definition_less_instance() {
+    let rec = record(None, None, None, None);
+    let defs = vec![];
+    let g = global(None, Some(RELAY_MESH_PROVIDER_ID));
+
+    assert_eq!(
+        resolve_effective_relay_mesh_model_id(&rec, &defs, &g).as_deref(),
+        Some(RELAY_MESH_AUTO_MODEL_ID)
+    );
+}
+
+/// Orphaned instance: no mesh preflight regardless of stale record bytes —
+/// the caller's own orphan refusal is what matters, not a mesh bootstrap for
+/// a start that will never happen.
+#[test]
+fn orphaned_instance_never_triggers_mesh_preflight() {
+    let rec = record(
+        Some("missing-def"),
+        Some("auto"),
+        Some(RELAY_MESH_PROVIDER_ID),
+        None,
+    );
+    let g = global(None, None);
+
+    assert_eq!(resolve_effective_relay_mesh_model_id(&rec, &[], &g), None);
+}

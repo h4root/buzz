@@ -1,5 +1,3 @@
-#[cfg(feature = "mesh-llm")]
-use super::relay_mesh_model_id;
 use super::{
     find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, load_personas,
     save_managed_agents, spawn_agent_child, sync_managed_agent_processes, BackendKind,
@@ -214,16 +212,26 @@ pub async fn restore_managed_agents_on_launch(
 
     #[cfg(feature = "mesh-llm")]
     let agents_to_start = {
+        // Preflight against the same resolution spawn uses — `resolve_effective_config`
+        // (definition → global fallback) — never the record's own `provider`/`model`/
+        // `relay_mesh` bytes. See `start_local_agent_with_preflight` in `commands/agents.rs`
+        // for the identical rationale on the interactive path.
+        let personas = load_personas(app).unwrap_or_default();
+        let global = super::load_global_agent_config(app).unwrap_or_default();
         let mut mesh_preflight_failures = std::collections::HashSet::new();
         for record in &agents_to_start {
-            if relay_mesh_model_id(record).is_none() {
+            let mesh_model_id = super::effective_config::resolve_effective_relay_mesh_model_id(
+                record, &personas, &global,
+            );
+            if mesh_model_id.is_none() {
                 continue;
             }
             // Auto-start after relaunch: re-resolve a live bootstrap target and
             // dial it. Skip (with an actionable error) only when no live target
             // serves this model right now.
             if let Err(error) =
-                crate::commands::ensure_relay_mesh_for_record(app, record, false).await
+                crate::commands::ensure_relay_mesh_for_record(app, mesh_model_id.as_deref(), false)
+                    .await
             {
                 persist_restore_error(app, &state, &record.pubkey, error)?;
                 mesh_preflight_failures.insert(record.pubkey.clone());

@@ -292,16 +292,16 @@ fn resolve_created_avatar_url(
 #[cfg(feature = "mesh-llm")]
 async fn ensure_relay_mesh_for_record(
     app: &AppHandle,
-    record: &ManagedAgentRecord,
+    model_id: Option<&str>,
     allow_fresh_create_start: bool,
 ) -> Result<(), String> {
-    crate::commands::ensure_relay_mesh_for_record(app, record, allow_fresh_create_start).await
+    crate::commands::ensure_relay_mesh_for_record(app, model_id, allow_fresh_create_start).await
 }
 
 #[cfg(not(feature = "mesh-llm"))]
 async fn ensure_relay_mesh_for_record(
     _app: &AppHandle,
-    _record: &ManagedAgentRecord,
+    _model_id: Option<&str>,
     _allow_fresh_create_start: bool,
 ) -> Result<(), String> {
     Ok(())
@@ -331,18 +331,22 @@ pub(super) async fn start_local_agent_with_preflight(
         return Err(format!("agent {pubkey} is not a local agent"));
     }
 
-    // Preflight against the record's SPAWN-TIME state, not its pre-snapshot
-    // bytes: preview the same prospective persona re-snapshot spawn_config_hash
-    // uses, so a definition edit that flips `provider` to/from relay-mesh
-    // between saves is reflected in the mesh-preflight decision instead of
-    // the stale value that `apply_persona_snapshot` below is about to
-    // overwrite anyway.
-    let preflight_record =
-        crate::managed_agents::persona_events::preview_prospective_persona_snapshot(
+    // Preflight against the same resolution spawn uses — `resolve_effective_config`
+    // (definition → global fallback) — never the record's own `provider`/`model`/
+    // `relay_mesh` bytes. For a linked instance this reads the CURRENT definition
+    // directly, so a definition edit that flips `provider` to/from relay-mesh
+    // between saves is reflected here without needing a prospective re-snapshot;
+    // for a global-inherited blank definition, it also folds in the global
+    // default, which record-byte sniffing could never see.
+    let personas = load_personas(app).unwrap_or_default();
+    let global = crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
+    let mesh_model_id =
+        crate::managed_agents::effective_config::resolve_effective_relay_mesh_model_id(
             &record_snapshot,
-            &load_personas(app).unwrap_or_default(),
+            &personas,
+            &global,
         );
-    ensure_relay_mesh_for_record(app, &preflight_record, allow_fresh_create_start).await?;
+    ensure_relay_mesh_for_record(app, mesh_model_id.as_deref(), allow_fresh_create_start).await?;
 
     let _store_guard = state
         .managed_agents_store_lock
