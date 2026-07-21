@@ -3148,7 +3148,11 @@ fn classify_and_complete_batch(
     result: &mut PromptResult,
     removed_channels: &HashSet<Uuid>,
     rest_client: Option<&relay::RestClient>,
-) {
+) -> Option<&'static str> {
+    // Returns the hard-timeout fate suffix for the caller's death_message
+    // construction (only meaningful when outcome is Timeout(Hard { .. }); None
+    // for every other outcome).
+    let mut hard_timeout_fate_suffix: Option<&'static str> = None;
     if let Some(batch) = result.batch.take() {
         let channel_id = batch.channel_id;
         // Don't requeue batches for channels the agent was removed from —
@@ -3160,6 +3164,7 @@ fn classify_and_complete_batch(
                 "dropping failed batch for removed channel"
             );
             queue.complete_batch(channel_id, Some(batch), BatchDisposition::Dropped);
+            hard_timeout_fate_suffix = Some(" — batch dropped (channel removed)");
         } else if matches!(
             result.outcome,
             PromptOutcome::Cancelled | PromptOutcome::CancelDrainTimeout(_)
@@ -3202,6 +3207,7 @@ fn classify_and_complete_batch(
             );
             spawn_failure_notice(rest_client, &batch, content);
             queue.complete_batch(channel_id, Some(batch), BatchDisposition::Dropped);
+            hard_timeout_fate_suffix = Some(" — dead-lettered (no recent activity)");
         } else if matches!(
             result.outcome,
             PromptOutcome::Timeout(TimeoutKind::Hard {
@@ -3223,6 +3229,9 @@ fn classify_and_complete_batch(
                     config.max_turn_duration_secs
                 );
                 spawn_failure_notice(rest_client, &dead, content);
+                hard_timeout_fate_suffix = Some(" — dead-lettered (retry budget exhausted)");
+            } else {
+                hard_timeout_fate_suffix = Some(" — requeued for retry (recently active)");
             }
         } else {
             let outcome_reason = match &result.outcome {
@@ -3249,6 +3258,7 @@ fn classify_and_complete_batch(
     } else if let PromptSource::Channel(ch) = &result.source {
         queue.complete_batch(*ch, None, BatchDisposition::Success);
     }
+    hard_timeout_fate_suffix
 }
 
 /// Best-effort drain of both `join_set` and `result_rx` during the shutdown
@@ -3360,100 +3370,12 @@ fn handle_prompt_result(
     // channel-removed drop or a heartbeat call with no batch at all. Each
     // branch below records what actually happened; only the hard-timeout
     // match arm in the death_message construction reads it.
-    let mut hard_timeout_fate_suffix: Option<&'static str> = None;
-
-    // Requeue BEFORE mark_complete: requeue() sets retry_after with a future
-    // deadline, and mark_complete() checks for it to decide whether to preserve
-    // retry_counts. If mark_complete runs first, retry_counts is cleared and
-    // every retry starts at attempt 1 — defeating exponential backoff and
-    // dead-letter protection.
-    if let Some(batch) = result.batch.take() {
-        // Don't requeue batches for channels the agent was removed from —
-        // those events are stale and should be silently dropped.
-        if !removed_channels.contains(&batch.channel_id) {
-            if matches!(
-                result.outcome,
-                PromptOutcome::Cancelled | PromptOutcome::CancelDrainTimeout(_)
-            ) {
-                // Cancel re-prompt: store as cancelled events so flush_next()
-                // merges them into the next FlushBatch.cancelled_events,
-                // enabling the annotated merged-prompt format. The batch's
-                // cancel_reason (set by the pool task per the control signal)
-                // selects steer vs interrupt framing. It is always set on this
-                // path; if somehow unset, fall back to the gentler Steer framing
-                // — consistent with MergeFraming::for_reason(None) and the
-                // system default — rather than telling the agent to supersede.
-                //
-                // CancelDrainTimeout shares this path with Cancelled: a failed
-                // 5s drain after a control-signal cancel is a cleanup-deadline
-                // problem, not the deterministic hard-cap death below — the
-                // original batch must survive with no retry/dead-letter
-                // accounting, same as a clean cancel.
-                let reason = batch.cancel_reason.unwrap_or(CancelReason::Steer);
-                queue.requeue_as_cancelled(batch, reason);
-            } else if matches!(
-                result.outcome,
-                PromptOutcome::Timeout(TimeoutKind::Hard {
-                    recently_active: false
-                })
-            ) {
-                tracing::error!(
-                    channel_id = %batch.channel_id,
-                    events = batch.events.len(),
-                    "dead-lettering batch after hard-cap timeout (no recent activity) — discarding {} events",
-                    batch.events.len(),
-                );
-                let content = format!(
-                    "⚠️ I couldn't process the last request (the turn exceeded the maximum duration ({}s)). Please re-send if it's still needed.",
-                    config.max_turn_duration_secs
-                );
-                spawn_failure_notice(rest_client, &batch, content);
-                hard_timeout_fate_suffix = Some(" — dead-lettered (no recent activity)");
-            } else if matches!(
-                result.outcome,
-                PromptOutcome::Timeout(TimeoutKind::Hard {
-                    recently_active: true
-                })
-            ) {
-                tracing::warn!(
-                    channel_id = %batch.channel_id,
-                    events = batch.events.len(),
-                    "hard-cap timeout with recent activity — requeueing for retry"
-                );
-                if let Some(dead) = queue.requeue(batch) {
-                    let content = format!(
-                        "⚠️ I couldn't process the last request after multiple retries (the turn exceeded the maximum duration ({}s)). Please re-send if it's still needed.",
-                        config.max_turn_duration_secs
-                    );
-                    spawn_failure_notice(rest_client, &dead, content);
-                    hard_timeout_fate_suffix = Some(" — dead-lettered (retry budget exhausted)");
-                } else {
-                    hard_timeout_fate_suffix = Some(" — requeued for retry (recently active)");
-                }
-            } else if let Some(dead) = queue.requeue(batch) {
-                let reason = match &result.outcome {
-                    PromptOutcome::Timeout(TimeoutKind::Idle) => "the turn timed out".to_string(),
-                    PromptOutcome::Timeout(TimeoutKind::Hard { .. }) => {
-                        "the turn exceeded the maximum duration".to_string()
-                    }
-                    PromptOutcome::AgentExited => "the agent process exited".to_string(),
-                    PromptOutcome::Error(e) => format!("{e}"),
-                    _ => "repeated failures".to_string(),
-                };
-                let content = format!(
-                    "⚠️ I couldn't process the last request after multiple retries ({reason}). Please re-send if it's still needed."
-                );
-                spawn_failure_notice(rest_client, &dead, content);
-            }
-        } else {
-            tracing::debug!(
-                channel_id = %batch.channel_id,
-                events = batch.events.len(),
-                "dropping failed batch for removed channel"
-            );
-            hard_timeout_fate_suffix = Some(" — batch dropped (channel removed)");
-        }
-    }
+    //
+    // `classify_and_complete_batch` owns all disposition logic (P3-F1 —
+    // one atomic completion writer) and returns the fate suffix for this
+    // death_message.
+    let hard_timeout_fate_suffix =
+        classify_and_complete_batch(queue, config, &mut result, removed_channels, rest_client);
 
     if let PromptSource::Heartbeat = &result.source {
         *heartbeat_in_flight = false;
@@ -5066,6 +4988,97 @@ mod error_outcome_emission_tests {
             "turn_error must retain the completed turn id"
         );
         turn_errors.len()
+    }
+
+    #[tokio::test]
+    async fn paul_probe_channel_released_after_ok_completion() {
+        // Real main-loop cycle: push -> flush_next (marks in-flight) ->
+        // Ok completion via handle_prompt_result -> channel must be
+        // released so the next event can dispatch.
+        //
+        // Regression test for the merge-commit defect where `handle_prompt_result`
+        // kept the inline requeue block (which never calls mark_complete) instead
+        // of routing through `classify_and_complete_batch` (which does). Without
+        // the fix, every channel wedges permanently after its first turn.
+        let keys = Keys::generate();
+        let ch = Uuid::new_v4();
+        let ev1 = EventBuilder::new(Kind::Custom(9), "first")
+            .sign_with_keys(&keys)
+            .unwrap();
+        let ev2 = EventBuilder::new(Kind::Custom(9), "second")
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        queue.push(crate::queue::QueuedEvent::for_test(
+            ch,
+            ev1,
+            std::time::Instant::now(),
+            "test".into(),
+        ));
+        let _batch = queue.flush_next().expect("first flush");
+        assert!(queue.is_channel_in_flight(ch));
+
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![None]);
+        let task_id = pool.join_set.spawn(async {}).id();
+        pool.task_map_mut().insert(
+            task_id,
+            crate::pool::TaskMeta {
+                agent_index: 0,
+                channel_id: Some(ch),
+                turn_id: "t".to_string(),
+                recoverable_batch: None,
+                control_tx: None,
+                steer_tx: None,
+            },
+        );
+        let config = test_config();
+        let mut heartbeat_in_flight = false;
+        let removed_channels = HashSet::new();
+        let mut crash_history = vec![SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        }];
+        let (respawn_tx, _respawn_rx) = mpsc::channel(8);
+        let mut respawn_tasks = tokio::task::JoinSet::new();
+
+        let result = PromptResult {
+            agent,
+            source: PromptSource::Channel(ch),
+            turn_id: "t".to_string(),
+            outcome: PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            batch: None,
+        };
+        handle_prompt_result(
+            &mut pool,
+            &mut queue,
+            &config,
+            result,
+            &mut heartbeat_in_flight,
+            &removed_channels,
+            &mut crash_history,
+            &respawn_tx,
+            &mut respawn_tasks,
+            None,
+            None,
+        );
+
+        assert!(
+            !queue.is_channel_in_flight(ch),
+            "channel must be released after Ok completion"
+        );
+        queue.push(crate::queue::QueuedEvent::for_test(
+            ch,
+            ev2,
+            std::time::Instant::now(),
+            "test".into(),
+        ));
+        assert!(
+            queue.flush_next().is_some(),
+            "second event must dispatch after the turn completed"
+        );
     }
 
     #[tokio::test]

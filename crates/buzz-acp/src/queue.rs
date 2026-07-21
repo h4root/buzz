@@ -988,7 +988,7 @@ impl EventQueue {
     /// `mark_complete` separately.
     ///
     /// Private: only [`Self::complete_batch`] may call this (P3-F1).
-    pub fn requeue(&mut self, batch: FlushBatch) -> Option<FlushBatch> {
+    fn requeue(&mut self, batch: FlushBatch) -> Option<FlushBatch> {
         let channel_id = batch.channel_id;
         let attempt = {
             let count = self.retry_counts.entry(channel_id).or_insert(0);
@@ -1077,7 +1077,7 @@ impl EventQueue {
     /// `flush_next()`. No retry throttle, no backoff.
     ///
     /// Private: only [`Self::complete_batch`] may call this (P3-F1).
-    pub fn requeue_as_cancelled(&mut self, batch: FlushBatch, reason: CancelReason) {
+    fn requeue_as_cancelled(&mut self, batch: FlushBatch, reason: CancelReason) {
         let entry = self.cancelled_batches.entry(batch.channel_id).or_default();
         // Preserve any already-cancelled events from a prior cancel (double-cancel).
         entry.extend(batch.cancelled_events);
