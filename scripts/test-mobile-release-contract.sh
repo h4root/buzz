@@ -103,6 +103,16 @@ fail() {
   exit 1
 }
 
+assert_no_removed_mobile_release_behavior() {
+  local status
+
+  grep -Eq 'gh[[:space:]]+release|mobile-release/|finalize' "$@" && \
+    fail "removed branch/finalization/GitHub Release behavior remains"
+  status="$?"
+  [[ "$status" -eq 1 ]] || \
+    fail "could not scan for removed branch/finalization/GitHub Release behavior"
+}
+
 git init -q --bare "$remote"
 git init -q "$work"
 git -C "$work" config user.name test
@@ -272,11 +282,16 @@ fi
 if git --git-dir="$remote" show-ref --verify --quiet refs/tags/mobile-v1.2.3; then
   fail "stable mobile tag alias was created"
 fi
-if rg -q 'gh[[:space:]]+release|mobile-release/|finalize' \
-    "$repo_root/scripts/mobile-release.sh" \
-    "$repo_root/scripts/publish-mobile-release-candidate.sh" \
-    "$repo_root/.github/workflows/mobile-release-candidate.yml"; then
-  fail "removed branch/finalization/GitHub Release behavior remains"
+assert_no_removed_mobile_release_behavior \
+  "$repo_root/scripts/mobile-release.sh" \
+  "$repo_root/scripts/publish-mobile-release-candidate.sh" \
+  "$repo_root/.github/workflows/mobile-release-candidate.yml"
+# Prove the negative contract itself is discriminating rather than merely
+# accepting a missing or broken search tool as "not found."
+printf '%s\n' 'gh release create forbidden' > "$tmp/forbidden-mobile-release-behavior"
+if (assert_no_removed_mobile_release_behavior "$tmp/forbidden-mobile-release-behavior") \
+    >/dev/null 2>&1; then
+  fail "removed-behavior assertion did not reject a forbidden GitHub Release call"
 fi
 grep -Fq 'version: 0.0.0+1' "$repo_root/mobile/pubspec.yaml"
 if grep -qE 'release-mobile|bump-mobile-version|get-current-mobile-version' "$repo_root/Justfile"; then
