@@ -7,6 +7,7 @@ use tauri::State;
 use crate::{
     app_state::AppState,
     events,
+    managed_agents::persona_events::monotonic_created_at,
     models::{ProfileInfo, SearchUsersResponse, UserNotesResponse, UsersBatchResponse},
     nostr_convert,
     relay::{
@@ -113,8 +114,8 @@ pub async fn update_profile_at_relay(
         "limit": 1
     });
     let prior_events = query_relay_at(&state, &api_base_url, std::slice::from_ref(&filter)).await?;
-    let current: Value = prior_events
-        .first()
+    let prior_event = prior_events.first();
+    let current: Value = prior_event
         .and_then(|event| serde_json::from_str::<Value>(&event.content).ok())
         .unwrap_or(Value::Null);
     let current_avatar_url = current
@@ -127,11 +128,7 @@ pub async fn update_profile_at_relay(
         return Err("profile avatar changed before deferred save".to_string());
     }
 
-    let display_name = current.get("display_name").and_then(Value::as_str);
-    let name = current.get("name").and_then(Value::as_str);
-    let about = current.get("about").and_then(Value::as_str);
-    let nip05 = current.get("nip05").and_then(Value::as_str);
-    let builder = events::build_profile(display_name, name, Some(&avatar_url), about, nip05)?;
+    let builder = build_deferred_profile_event(&current, &avatar_url, prior_event)?;
     submit_event_at_with_keys(builder, &state, &api_base_url, &signer).await?;
 
     let events = query_relay_at(&state, &api_base_url, &[filter]).await?;
@@ -140,6 +137,24 @@ pub async fn update_profile_at_relay(
         .map(nostr_convert::profile_info_from_event)
         .transpose()?
         .unwrap_or_else(|| empty_profile_info(&expected_pubkey)))
+}
+
+fn build_deferred_profile_event(
+    current: &Value,
+    avatar_url: &str,
+    prior_event: Option<&nostr::Event>,
+) -> Result<nostr::EventBuilder, String> {
+    let display_name = current.get("display_name").and_then(Value::as_str);
+    let name = current.get("name").and_then(Value::as_str);
+    let about = current.get("about").and_then(Value::as_str);
+    let nip05 = current.get("nip05").and_then(Value::as_str);
+
+    Ok(
+        events::build_profile(display_name, name, Some(avatar_url), about, nip05)?
+            .custom_created_at(monotonic_created_at(
+                prior_event.map(|event| event.created_at.as_secs() as i64),
+            )),
+    )
 }
 
 fn capture_expected_signer(state: &AppState, expected_pubkey: &str) -> Result<nostr::Keys, String> {
@@ -413,6 +428,35 @@ mod tests {
         assert_eq!(
             capture_expected_signer(&state, &original_pubkey).unwrap_err(),
             "profile identity changed before avatar save"
+        );
+    }
+
+    #[test]
+    fn deferred_profile_event_is_strictly_newer_than_prior_head() {
+        let keys = nostr::Keys::generate();
+        let prior_created_at = nostr::Timestamp::now().as_secs() + 60;
+        let prior_event = nostr::EventBuilder::new(
+            nostr::Kind::Metadata,
+            serde_json::json!({"display_name": "Larry"}).to_string(),
+        )
+        .custom_created_at(nostr::Timestamp::from(prior_created_at))
+        .sign_with_keys(&keys)
+        .expect("sign prior profile");
+
+        let builder = build_deferred_profile_event(
+            &serde_json::json!({"display_name": "Larry"}),
+            "https://example.com/avatar.png",
+            Some(&prior_event),
+        )
+        .expect("build deferred profile");
+        let event = builder
+            .sign_with_keys(&keys)
+            .expect("sign deferred profile");
+
+        assert_eq!(event.created_at.as_secs(), prior_created_at + 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&event.content).unwrap()["picture"],
+            "https://example.com/avatar.png"
         );
     }
 
