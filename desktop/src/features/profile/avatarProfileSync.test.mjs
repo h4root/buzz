@@ -10,7 +10,11 @@ const INPUT = {
   expectedAvatarUrl: null,
 };
 
-function createHarness({ initialState = "pending", saveProfile } = {}) {
+function createHarness({
+  initialState = "pending",
+  saveProfile,
+  getActivePubkey = async () => INPUT.expectedPubkey,
+} = {}) {
   let presentation = { displayUrl: INPUT.avatarUrl, state: initialState };
   let listener = () => {};
   let unsubscribeCount = 0;
@@ -30,6 +34,7 @@ function createHarness({ initialState = "pending", saveProfile } = {}) {
         saves.push(input);
         return { avatarUrl: input.avatarUrl, pubkey: input.expectedPubkey };
       }),
+    getActivePubkey,
     refreshCaches: async (profile, input) => {
       refreshed.push({ profile, input });
     },
@@ -94,6 +99,27 @@ test("a reset sync accepts deferred work from the next community", async () => {
 
   assert.deepEqual(harness.saves, [nextInput]);
   assert.equal(harness.refreshed.length, 1);
+});
+
+test("skips cache refresh when the active identity changes during save", async () => {
+  let resolveSave;
+  const savePromise = new Promise((resolve) => {
+    resolveSave = resolve;
+  });
+  let activePubkey = INPUT.expectedPubkey;
+  const harness = createHarness({
+    initialState: "ready",
+    saveProfile: () => savePromise,
+    getActivePubkey: async () => activePubkey,
+  });
+  harness.sync.saveWhenReady(INPUT);
+
+  activePubkey = "replacement-pubkey";
+  resolveSave({ avatarUrl: INPUT.avatarUrl, pubkey: INPUT.expectedPubkey });
+  await flushPromises();
+
+  assert.deepEqual(harness.refreshed, []);
+  assert.equal(harness.unsubscribeCount, 1);
 });
 
 test("cache refresh follows only a successful save", async () => {

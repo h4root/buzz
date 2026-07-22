@@ -6,6 +6,7 @@ import {
   type AvatarPresentation,
 } from "@/features/profile/avatarPresentationStore";
 import { refreshProfileCaches } from "@/features/profile/profileCacheSync";
+import { getIdentity } from "@/shared/api/tauriIdentity";
 import { updateProfileAtRelay } from "@/shared/api/tauriProfiles";
 import type { Profile } from "@/shared/api/types";
 
@@ -20,6 +21,7 @@ type AvatarProfileSyncDependencies = {
   getPresentation: (avatarUrl: string) => AvatarPresentation | null;
   subscribe: (listener: () => void) => () => void;
   saveProfile: (input: PendingAvatarSave) => Promise<Profile>;
+  getActivePubkey: () => Promise<string | null>;
   refreshCaches: (profile: Profile, input: PendingAvatarSave) => Promise<void>;
 };
 
@@ -57,8 +59,15 @@ export function createAvatarProfileSync(
       isSaving = true;
       void dependencies
         .saveProfile(input)
-        .then((profile) => {
+        .then(async (profile) => {
           if (generation !== queuedGeneration) return;
+          const activePubkey = await dependencies.getActivePubkey();
+          if (
+            generation !== queuedGeneration ||
+            activePubkey?.toLowerCase() !== input.expectedPubkey.toLowerCase()
+          ) {
+            return;
+          }
           return dependencies.refreshCaches(profile, input);
         })
         .catch(() => undefined)
@@ -84,6 +93,13 @@ const avatarProfileSync = createAvatarProfileSync({
   getPresentation: getAvatarPresentation,
   subscribe: subscribeAvatarPresentations,
   saveProfile: updateProfileAtRelay,
+  getActivePubkey: async () => {
+    try {
+      return (await getIdentity()).pubkey;
+    } catch {
+      return null;
+    }
+  },
   refreshCaches: async (profile, input) => {
     if (!queryClient) return;
     await refreshProfileCaches(queryClient, profile, input.relayUrl);
