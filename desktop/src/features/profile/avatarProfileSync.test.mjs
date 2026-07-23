@@ -14,6 +14,7 @@ function createHarness({
   initialState = "pending",
   saveProfile,
   getActivePubkey = async () => INPUT.expectedPubkey,
+  scheduleRetry,
 } = {}) {
   let presentation = { displayUrl: INPUT.avatarUrl, state: initialState };
   let listener = () => {};
@@ -38,6 +39,7 @@ function createHarness({
     refreshCaches: async (profile, input) => {
       refreshed.push({ profile, input });
     },
+    scheduleRetry,
   });
 
   return {
@@ -120,6 +122,68 @@ test("skips cache refresh when the active identity changes during save", async (
 
   assert.deepEqual(harness.refreshed, []);
   assert.equal(harness.unsubscribeCount, 1);
+});
+
+test("retries a transient save and keeps the sync pending until success", async () => {
+  const scheduled = [];
+  let attempt = 0;
+  const harness = createHarness({
+    initialState: "ready",
+    saveProfile: async (input) => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("relay unreachable: network error");
+      return { avatarUrl: input.avatarUrl, pubkey: input.expectedPubkey };
+    },
+    scheduleRetry: (callback, delayMs) => {
+      const retry = { callback, delayMs, cancelled: false };
+      scheduled.push(retry);
+      return () => {
+        retry.cancelled = true;
+      };
+    },
+  });
+
+  harness.sync.saveWhenReady(INPUT);
+  await flushPromises();
+
+  assert.equal(attempt, 1);
+  assert.equal(harness.unsubscribeCount, 0);
+  assert.equal(scheduled[0].delayMs, 5_000);
+
+  scheduled[0].callback();
+  await flushPromises();
+
+  assert.equal(attempt, 2);
+  assert.equal(harness.refreshed.length, 1);
+  assert.equal(harness.unsubscribeCount, 1);
+});
+
+test("reset cancels a scheduled transient retry", async () => {
+  let scheduled;
+  let attempts = 0;
+  const harness = createHarness({
+    initialState: "ready",
+    saveProfile: async () => {
+      attempts += 1;
+      throw new Error("relay rate-limited: retry in 5s");
+    },
+    scheduleRetry: (callback, delayMs) => {
+      scheduled = { callback, delayMs, cancelled: false };
+      return () => {
+        scheduled.cancelled = true;
+      };
+    },
+  });
+
+  harness.sync.saveWhenReady(INPUT);
+  await flushPromises();
+  harness.sync.reset();
+
+  assert.equal(scheduled.delayMs, 5_000);
+  assert.equal(scheduled.cancelled, true);
+  scheduled.callback();
+  await flushPromises();
+  assert.equal(attempts, 1);
 });
 
 test("cache refresh follows only a successful save", async () => {

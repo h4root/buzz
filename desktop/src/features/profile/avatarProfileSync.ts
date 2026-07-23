@@ -9,6 +9,9 @@ import { refreshProfileCaches } from "@/features/profile/profileCacheSync";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { updateProfileAtRelay } from "@/shared/api/tauriProfiles";
 import type { Profile } from "@/shared/api/types";
+import { isRelayUnreachableError } from "@/shared/lib/relayError";
+
+const AVATAR_SAVE_RETRY_DELAYS_MS = [5_000, 30_000, 120_000] as const;
 
 type PendingAvatarSave = {
   avatarUrl: string;
@@ -23,7 +26,15 @@ type AvatarProfileSyncDependencies = {
   saveProfile: (input: PendingAvatarSave) => Promise<Profile>;
   getActivePubkey: () => Promise<string | null>;
   refreshCaches: (profile: Profile, input: PendingAvatarSave) => Promise<void>;
+  scheduleRetry?: (callback: () => void, delayMs: number) => () => void;
 };
+
+function isRetryableAvatarSaveError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    isRelayUnreachableError(error) || message.startsWith("relay rate-limited:")
+  );
+}
 
 export function createAvatarProfileSync(
   dependencies: AvatarProfileSyncDependencies,
@@ -33,7 +44,7 @@ export function createAvatarProfileSync(
 
   const reset = () => {
     generation += 1;
-    for (const unsubscribe of pendingSyncs.values()) unsubscribe();
+    for (const stop of pendingSyncs.values()) stop();
     pendingSyncs.clear();
   };
 
@@ -42,9 +53,14 @@ export function createAvatarProfileSync(
     if (pendingSyncs.has(syncKey)) return;
 
     let isSaving = false;
+    let retryAttempt = 0;
+    let cancelRetry: (() => void) | null = null;
+    let unsubscribe = () => {};
     const queuedGeneration = generation;
     const stop = () => {
-      pendingSyncs.get(syncKey)?.();
+      cancelRetry?.();
+      cancelRetry = null;
+      unsubscribe();
       pendingSyncs.delete(syncKey);
     };
     const saveIfReady = () => {
@@ -68,13 +84,39 @@ export function createAvatarProfileSync(
           ) {
             return;
           }
-          return dependencies.refreshCaches(profile, input);
+          await dependencies.refreshCaches(profile, input);
         })
-        .catch(() => undefined)
-        .finally(stop);
+        .then(stop)
+        .catch((error: unknown) => {
+          if (
+            generation !== queuedGeneration ||
+            !isRetryableAvatarSaveError(error)
+          ) {
+            stop();
+            return;
+          }
+          const delayMs = AVATAR_SAVE_RETRY_DELAYS_MS[retryAttempt];
+          if (delayMs === undefined) {
+            stop();
+            return;
+          }
+          retryAttempt += 1;
+          isSaving = false;
+          const scheduleRetry =
+            dependencies.scheduleRetry ??
+            ((callback, delay) => {
+              const timeout = window.setTimeout(callback, delay);
+              return () => window.clearTimeout(timeout);
+            });
+          cancelRetry = scheduleRetry(() => {
+            cancelRetry = null;
+            saveIfReady();
+          }, delayMs);
+        });
     };
 
-    pendingSyncs.set(syncKey, dependencies.subscribe(saveIfReady));
+    unsubscribe = dependencies.subscribe(saveIfReady);
+    pendingSyncs.set(syncKey, stop);
     saveIfReady();
   };
 
