@@ -7,6 +7,7 @@ mod agent_model_process;
 mod agent_models;
 mod agent_providers;
 mod agent_settings;
+mod agent_update_rollback;
 mod agents;
 mod canvas;
 mod channel_templates;
@@ -23,6 +24,7 @@ mod legacy_storage;
 mod link_preview;
 pub(crate) mod media;
 mod media_download;
+mod media_gif;
 mod media_transcode;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
