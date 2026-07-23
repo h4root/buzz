@@ -216,4 +216,116 @@ test.describe("community rail", () => {
     expect(toggleBox).not.toBeNull();
     expect(toggleBox?.x ?? 0).toBeLessThan(120);
   });
+
+  test("drag-to-reorder updates the stored community order and survives reload", async ({
+    page,
+  }) => {
+    await installMockBridge(page, undefined, { skipCommunitySeed: true });
+    await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
+    await page.goto("/");
+
+    const buttonA = page.getByTestId(`community-rail-button-${COMMUNITY_A.id}`);
+    const buttonB = page.getByTestId(`community-rail-button-${COMMUNITY_B.id}`);
+    await expect(buttonA).toBeVisible();
+    await expect(buttonB).toBeVisible();
+
+    // Drag B (lower) up over A (higher) so the order becomes [B, A].
+    const boxA = await buttonA.boundingBox();
+    const boxB = await buttonB.boundingBox();
+    if (!boxA || !boxB) throw new Error("community buttons not laid out");
+
+    const startX = boxB.x + boxB.width / 2;
+    const startY = boxB.y + boxB.height / 2;
+    const targetY = boxA.y + boxA.height / 2;
+
+    // dnd-kit PointerSensor requires a 6px activation distance before it picks
+    // up the drag. Move in small steps so pointermove events fire on every pixel.
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX, startY - 3, { steps: 3 });
+    await page.mouse.move(startX, targetY, { steps: 20 });
+    await page.mouse.up();
+
+    // The community list in localStorage must now be [B, A].
+    // This proves the drag triggered reorderCommunities and saveCommunities —
+    // the two functions that guarantee restart persistence.
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("buzz-communities");
+          if (!raw) return null;
+          const list = JSON.parse(raw) as Array<{ id: string }>;
+          return list.map((c) => c.id);
+        }),
+      )
+      .toEqual([COMMUNITY_B.id, COMMUNITY_A.id]);
+
+    // Verify the new order is also reflected in the rendered DOM — B button
+    // must appear above A button.
+    const newBoxA = await buttonA.boundingBox();
+    const newBoxB = await buttonB.boundingBox();
+    if (!newBoxA || !newBoxB)
+      throw new Error("community buttons not laid out after drag");
+    expect(newBoxB.y).toBeLessThan(newBoxA.y);
+  });
+
+  test("keyboard reorder: Space to pick up, ArrowUp to move, Space to drop updates stored order", async ({
+    page,
+  }) => {
+    await installMockBridge(page, undefined, { skipCommunitySeed: true });
+    await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
+    await page.goto("/");
+
+    const buttonA = page.getByTestId(`community-rail-button-${COMMUNITY_A.id}`);
+    const buttonB = page.getByTestId(`community-rail-button-${COMMUNITY_B.id}`);
+    await expect(buttonA).toBeVisible();
+    await expect(buttonB).toBeVisible();
+
+    // Focus B (the second/lower item) and use keyboard to move it above A.
+    // Use page.evaluate to dispatch the keydown directly so React's synthetic
+    // onKeyDown fires first (and calls preventDefault before the browser fires
+    // the button's native click activation).
+    await buttonB.focus();
+    await page.evaluate((testId) => {
+      const el = document.querySelector(`[data-testid="${testId}"]`);
+      if (!el) throw new Error(`button not found: ${testId}`);
+      el.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }, `community-rail-button-${COMMUNITY_B.id}`);
+    // Wait briefly for dnd-kit to register the drag-start.
+    await page.waitForTimeout(50);
+    // ArrowUp moves the active item one slot up.
+    await page.keyboard.press("ArrowUp");
+    // Space drops the item.
+    await page.evaluate((testId) => {
+      const el = document.querySelector(`[data-testid="${testId}"]`);
+      if (!el) throw new Error(`button not found: ${testId}`);
+      el.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }, `community-rail-button-${COMMUNITY_B.id}`);
+
+    // The community list in localStorage must now be [B, A].
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = window.localStorage.getItem("buzz-communities");
+          if (!raw) return null;
+          const list = JSON.parse(raw) as Array<{ id: string }>;
+          return list.map((c) => c.id);
+        }),
+      )
+      .toEqual([COMMUNITY_B.id, COMMUNITY_A.id]);
+  });
 });

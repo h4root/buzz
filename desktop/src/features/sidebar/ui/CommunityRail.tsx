@@ -1,6 +1,7 @@
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
@@ -9,6 +10,7 @@ import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import {
   SortableContext,
   arrayMove,
+  sortableKeyboardCoordinates,
   verticalListSortingStrategy,
   useSortable,
 } from "@dnd-kit/sortable";
@@ -181,13 +183,28 @@ function CommunityButton({
   );
 }
 
-function CommunityDragOverlay({ community }: { community: Community }) {
+function CommunityDragOverlay({
+  community,
+  iconUrl,
+}: {
+  community: Community;
+  iconUrl: string | null;
+}) {
   return (
     <div
       className="flex h-9 w-9 cursor-grabbing items-center justify-center overflow-hidden rounded-xl bg-primary text-xs font-semibold text-primary-foreground opacity-90 shadow-lg ring-1 ring-sidebar-border"
       data-buzz-flat
     >
-      {getInitials(community.name) || "🐝"}
+      {iconUrl ? (
+        <img
+          alt=""
+          className="h-full w-full object-cover"
+          draggable={false}
+          src={iconUrl}
+        />
+      ) : (
+        getInitials(community.name) || "🐝"
+      )}
     </div>
   );
 }
@@ -295,6 +312,9 @@ export function CommunityRail({
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 
   if (communities.length <= 1) {
@@ -373,7 +393,10 @@ export function CommunityRail({
         </SortableContext>
         <DragOverlay>
           {draggingCommunity ? (
-            <CommunityDragOverlay community={draggingCommunity} />
+            <CommunityDragOverlay
+              community={draggingCommunity}
+              iconUrl={iconsByCommunity[draggingCommunity.id] ?? null}
+            />
           ) : null}
         </DragOverlay>
       </DndContext>
