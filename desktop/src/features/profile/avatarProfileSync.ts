@@ -20,6 +20,15 @@ type PendingAvatarSave = {
   expectedAvatarUrl: string | null;
 };
 
+type DeferredAvatarSave = Pick<PendingAvatarSave, "avatarUrl" | "relayUrl">;
+
+type AvatarSaveRegistration = {
+  cancel: () => void;
+  release: (
+    input: Pick<PendingAvatarSave, "expectedPubkey" | "expectedAvatarUrl">,
+  ) => void;
+};
+
 type AvatarProfileSyncDependencies = {
   getPresentation: (avatarUrl: string) => AvatarPresentation | null;
   subscribe: (listener: () => void) => () => void;
@@ -48,11 +57,12 @@ export function createAvatarProfileSync(
     pendingSyncs.clear();
   };
 
-  const saveWhenReady = (input: PendingAvatarSave): void => {
+  const queueSave = (input: PendingAvatarSave, assumeReady = false): void => {
     const syncKey = `${input.relayUrl}:${input.expectedPubkey}:${input.avatarUrl}`;
     if (pendingSyncs.has(syncKey)) return;
 
     let isSaving = false;
+    let isReady = assumeReady;
     let retryAttempt = 0;
     let cancelRetry: (() => void) | null = null;
     let unsubscribe = () => {};
@@ -64,13 +74,14 @@ export function createAvatarProfileSync(
       pendingSyncs.delete(syncKey);
     };
     const saveIfReady = () => {
-      if (generation !== queuedGeneration) return;
+      if (generation !== queuedGeneration || cancelRetry !== null) return;
       const presentation = dependencies.getPresentation(input.avatarUrl);
-      if (!presentation) {
+      if (presentation?.state === "ready") isReady = true;
+      if (!presentation && !isReady) {
         stop();
         return;
       }
-      if (presentation.state !== "ready" || isSaving) return;
+      if (!isReady || isSaving) return;
 
       isSaving = true;
       void dependencies
@@ -120,7 +131,44 @@ export function createAvatarProfileSync(
     saveIfReady();
   };
 
-  return { reset, saveWhenReady };
+  const registerWhenReady = (
+    input: DeferredAvatarSave,
+  ): AvatarSaveRegistration => {
+    const registrationKey = `registration:${input.relayUrl}:${input.avatarUrl}`;
+    if (pendingSyncs.has(registrationKey)) {
+      return { cancel: () => {}, release: () => {} };
+    }
+
+    let observedReady = false;
+    let active = true;
+    const queuedGeneration = generation;
+    const observe = () => {
+      if (generation !== queuedGeneration) return;
+      if (dependencies.getPresentation(input.avatarUrl)?.state === "ready") {
+        observedReady = true;
+      }
+    };
+    const unsubscribe = dependencies.subscribe(observe);
+    const cancel = () => {
+      if (!active) return;
+      active = false;
+      unsubscribe();
+      pendingSyncs.delete(registrationKey);
+    };
+    pendingSyncs.set(registrationKey, cancel);
+    observe();
+
+    return {
+      cancel,
+      release: (completion) => {
+        if (!active || generation !== queuedGeneration) return;
+        cancel();
+        queueSave({ ...input, ...completion }, observedReady);
+      },
+    };
+  };
+
+  return { registerWhenReady, reset, saveWhenReady: queueSave };
 }
 
 let queryClient: QueryClient | null = null;
@@ -147,6 +195,12 @@ const avatarProfileSync = createAvatarProfileSync({
     await refreshProfileCaches(queryClient, profile, input.relayUrl);
   },
 });
+
+export function registerAvatarWhenReady(
+  input: DeferredAvatarSave,
+): AvatarSaveRegistration {
+  return avatarProfileSync.registerWhenReady(input);
+}
 
 export function saveAvatarWhenReady(input: PendingAvatarSave): void {
   avatarProfileSync.saveWhenReady(input);

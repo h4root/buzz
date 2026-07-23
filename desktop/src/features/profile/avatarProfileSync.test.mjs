@@ -49,8 +49,14 @@ function createHarness({
     listener: () => listener(),
     refreshed,
     saves,
+    removePresentation: () => {
+      presentation = null;
+    },
     setState: (state) => {
-      presentation = { ...presentation, state };
+      presentation = {
+        ...(presentation ?? { displayUrl: INPUT.avatarUrl }),
+        state,
+      };
     },
     sync,
   };
@@ -150,6 +156,10 @@ test("retries a transient save and keeps the sync pending until success", async 
   assert.equal(harness.unsubscribeCount, 0);
   assert.equal(scheduled[0].delayMs, 5_000);
 
+  harness.listener();
+  await flushPromises();
+  assert.equal(attempt, 1, "store updates must not bypass retry backoff");
+
   scheduled[0].callback();
   await flushPromises();
 
@@ -184,6 +194,48 @@ test("reset cancels a scheduled transient retry", async () => {
   scheduled.callback();
   await flushPromises();
   assert.equal(attempts, 1);
+});
+
+test("registration preserves readiness until the initial profile write completes", async () => {
+  const harness = createHarness();
+  const registration = harness.sync.registerWhenReady({
+    avatarUrl: INPUT.avatarUrl,
+    relayUrl: INPUT.relayUrl,
+  });
+
+  harness.setState("ready");
+  harness.listener();
+  harness.removePresentation();
+  assert.deepEqual(harness.saves, []);
+
+  registration.release({
+    expectedPubkey: INPUT.expectedPubkey,
+    expectedAvatarUrl: null,
+  });
+  await flushPromises();
+
+  assert.deepEqual(harness.saves, [INPUT]);
+  assert.equal(harness.refreshed.length, 1);
+});
+
+test("cancelled registration cannot save after the initial profile write fails", async () => {
+  const harness = createHarness();
+  const registration = harness.sync.registerWhenReady({
+    avatarUrl: INPUT.avatarUrl,
+    relayUrl: INPUT.relayUrl,
+  });
+
+  harness.setState("ready");
+  harness.listener();
+  registration.cancel();
+  registration.release({
+    expectedPubkey: INPUT.expectedPubkey,
+    expectedAvatarUrl: null,
+  });
+  await flushPromises();
+
+  assert.deepEqual(harness.saves, []);
+  assert.equal(harness.unsubscribeCount, 1);
 });
 
 test("cache refresh follows only a successful save", async () => {

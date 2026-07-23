@@ -14,7 +14,7 @@ import {
   WELCOME_SURFACE_READY_EVENT,
 } from "@/features/onboarding/welcome";
 import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
-import { saveAvatarWhenReady } from "@/features/profile/avatarProfileSync";
+import { registerAvatarWhenReady } from "@/features/profile/avatarProfileSync";
 import { profileQueryKey } from "@/features/profile/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
@@ -389,21 +389,26 @@ export function CommunityOnboardingFlow({
         presentationState !== "failed" &&
         presentationState !== "pending";
 
-      const profile = await updateProfile({
-        displayName: displayName.trim(),
-        avatarUrl: shouldSaveCandidate ? candidateAvatarUrl : undefined,
-      });
-      if (
-        candidateAvatarUrl &&
-        presentationState &&
-        presentationState !== "ready"
-      ) {
-        saveAvatarWhenReady({
-          avatarUrl: candidateAvatarUrl,
-          relayUrl: transaction.relayUrl,
+      const deferredAvatar =
+        candidateAvatarUrl && presentationState && presentationState !== "ready"
+          ? registerAvatarWhenReady({
+              avatarUrl: candidateAvatarUrl,
+              relayUrl: transaction.relayUrl,
+            })
+          : null;
+
+      try {
+        const profile = await updateProfile({
+          displayName: displayName.trim(),
+          avatarUrl: shouldSaveCandidate ? candidateAvatarUrl : undefined,
+        });
+        deferredAvatar?.release({
           expectedPubkey: profile.pubkey,
           expectedAvatarUrl: profile.avatarUrl,
         });
+      } catch (error) {
+        deferredAvatar?.cancel();
+        throw error;
       }
       update({ stage: "team-intro", error: undefined });
     } catch (error) {
