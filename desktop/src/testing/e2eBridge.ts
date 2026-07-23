@@ -4871,6 +4871,7 @@ function buildMockProjectEvents(): RelayEvent[] {
           ...(kind === KIND_GIT_ISSUE ? [] : [["c", commitHash]]),
           ...(kind === KIND_GIT_PULL_REQUEST
             ? [
+                ["h", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
                 ["branch-name", `feature/mock-${dayOffset}-${index}`],
                 [
                   "clone",
@@ -9533,6 +9534,38 @@ export function maybeInstallE2eTauriMocks() {
           commit: input.expectedCommit,
           message: `Deleted branch ${input.branch}.`,
         };
+      }
+      case "sign_project_pull_request_status": {
+        const { input } = payload as {
+          input: {
+            createdAt: number;
+            pullRequestAuthor: string;
+            pullRequestId: string;
+            repoAddress: string;
+            status: "open" | "draft" | "closed";
+            targetOwner: string;
+          };
+        };
+        const kind = {
+          open: KIND_GIT_STATUS_OPEN,
+          draft: KIND_GIT_STATUS_DRAFT,
+          closed: KIND_GIT_STATUS_CLOSED,
+        }[input.status];
+        const event = createMockEvent(
+          kind,
+          "",
+          [
+            ["e", input.pullRequestId, "", "root"],
+            ["a", input.repoAddress],
+            ["p", input.targetOwner],
+            ["p", input.pullRequestAuthor],
+          ],
+          input.targetOwner,
+          input.createdAt,
+        );
+        window.__BUZZ_E2E_SIGNED_EVENTS__?.push(event);
+        getMockProjectEventStore().push(event);
+        return null;
       }
       case "sign_project_pull_request_review_request": {
         const { input } = payload as {

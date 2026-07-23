@@ -1293,6 +1293,8 @@ pub struct GitPullRequestMeta {
     pub euc: Option<String>,
     /// Additional pubkeys to `p`-tag besides the repo owner.
     pub recipients: Vec<String>,
+    /// NIP-29 channel where the pull request originated (`h` tag).
+    pub channel_id: Option<String>,
     /// PR subject line (`subject` tag) — required, used as the header.
     pub subject: String,
     /// Labels (`t` tags).
@@ -1352,6 +1354,14 @@ pub fn build_git_pull_request(
         tags.push(tag(&["t", label])?);
     }
     tags.push(tag(&["c", &meta.commit])?);
+    if let Some(ref channel_id) = meta.channel_id {
+        if channel_id.trim().is_empty() {
+            return Err(SdkError::InvalidInput(
+                "channel_id must not be empty".into(),
+            ));
+        }
+        tags.push(tag(&["h", channel_id])?);
+    }
     let mut clone_tag = vec!["clone"];
     clone_tag.extend(meta.clone_urls.iter().map(String::as_str));
     tags.push(tag(&clone_tag)?);
@@ -3351,6 +3361,7 @@ mod tests {
             clone_urls: vec!["https://example.com/repo.git".to_string()],
             branch_name: Some("feat/x".to_string()),
             labels: vec!["enhancement".to_string()],
+            channel_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
             ..Default::default()
         };
         let ev = sign(build_git_pull_request(&pr_repo(), "PR body", &meta).unwrap());
@@ -3361,6 +3372,7 @@ mod tests {
         assert!(has_tag(&ev, "subject", "Add feature X"));
         assert!(has_tag(&ev, "c", &"c".repeat(40)));
         assert!(has_tag(&ev, "t", "enhancement"));
+        assert!(has_tag(&ev, "h", "11111111-1111-4111-8111-111111111111"));
         assert!(has_tag(&ev, "branch-name", "feat/x"));
         assert_eq!(
             full_clone_tag(&ev),
