@@ -1305,7 +1305,7 @@ mod tests {
         for payload in [
             b"buzz_agent_snapshotX\0data".as_slice(),
             b"buzz_agent_snapshot_extra\0data",
-            b"buzz_agent_snapshot",   // no separator at all
+            b"buzz_agent_snapshot", // no separator at all
             b"Comment\0GPS=37.7,-122.4",
         ] {
             let mut png = TINY_PNG[..TINY_PNG.len() - 12].to_vec();
