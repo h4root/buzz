@@ -50,6 +50,23 @@ Uint8List _scrubPng(Uint8List bytes) {
     }
     final typeStart = offset + 4;
     final type = ascii.decode(bytes.sublist(typeStart, typeStart + 4));
+    if (type == 'iCCP') {
+      throw const FormatException(
+        'Animated PNG ICC profile cannot be removed safely',
+      );
+    }
+    if (type == 'eXIf') {
+      final orientation = _readExifOrientation(
+        bytes,
+        offset + 8,
+        payloadLength,
+      );
+      if (orientation != null && orientation >= 2 && orientation <= 8) {
+        throw const FormatException(
+          'Animated PNG EXIF orientation cannot be removed safely',
+        );
+      }
+    }
     final isAncillary = bytes[typeStart] & 0x20 != 0;
     if (!isAncillary || _allowedPngAncillaryChunks.contains(type)) {
       output.add(Uint8List.sublistView(bytes, offset, offset + chunkLength));
@@ -92,32 +109,61 @@ Uint8List _scrubWebp(Uint8List bytes) {
       throw const FormatException('Invalid WebP chunk length');
     }
 
+    if (type == 'EXIF') {
+      final orientation = _readExifOrientation(
+        bytes,
+        payloadStart,
+        payloadLength,
+      );
+      if (orientation != null && orientation >= 2 && orientation <= 8) {
+        throw const FormatException(
+          'Animated WebP EXIF orientation cannot be removed safely',
+        );
+      }
+    }
+    if (type == 'ICCP') {
+      throw const FormatException(
+        'Animated WebP ICC profile cannot be removed safely',
+      );
+    }
+
     if (_allowedWebpChunks.contains(type)) {
-      chunks.add(ascii.encode(type));
-      chunks.add(_uint32LittleEndian(payloadLength));
       if (type == 'VP8X') {
         if (payloadLength == 0) {
           throw const FormatException('Invalid VP8X chunk');
         }
-        chunks.addByte(bytes[payloadStart] & ~_webpMetadataFlags);
-        chunks.add(
-          Uint8List.sublistView(
-            bytes,
-            payloadStart + 1,
-            payloadStart + payloadLength,
+        final payload = BytesBuilder(copy: false)
+          ..addByte(bytes[payloadStart] & ~_webpMetadataFlags)
+          ..add(
+            Uint8List.sublistView(
+              bytes,
+              payloadStart + 1,
+              payloadStart + payloadLength,
+            ),
+          );
+        _addWebpChunk(chunks, type, payload.takeBytes());
+      } else if (type == 'ANMF') {
+        _addWebpChunk(
+          chunks,
+          type,
+          _scrubAnmfPayload(
+            Uint8List.sublistView(
+              bytes,
+              payloadStart,
+              payloadStart + payloadLength,
+            ),
           ),
         );
       } else {
-        chunks.add(
+        _addWebpChunk(
+          chunks,
+          type,
           Uint8List.sublistView(
             bytes,
             payloadStart,
             payloadStart + payloadLength,
           ),
         );
-      }
-      if (payloadLength.isOdd) {
-        chunks.addByte(0);
       }
     }
     offset = chunkEnd;
@@ -130,6 +176,123 @@ Uint8List _scrubWebp(Uint8List bytes) {
     ..add(ascii.encode('WEBP'))
     ..add(chunkBytes);
   return output.takeBytes();
+}
+
+void _addWebpChunk(BytesBuilder output, String type, Uint8List payload) {
+  output
+    ..add(ascii.encode(type))
+    ..add(_uint32LittleEndian(payload.length))
+    ..add(payload);
+  if (payload.length.isOdd) output.addByte(0);
+}
+
+Uint8List _scrubAnmfPayload(Uint8List payload) {
+  const frameHeaderLength = 16;
+  if (payload.length < frameHeaderLength) {
+    throw const FormatException('Invalid WebP animation frame');
+  }
+
+  final output = BytesBuilder(copy: false)
+    ..add(Uint8List.sublistView(payload, 0, frameHeaderLength));
+  var offset = frameHeaderLength;
+  var sawAlpha = false;
+  var sawImage = false;
+
+  while (offset < payload.length) {
+    if (payload.length - offset < 8) {
+      throw const FormatException('Truncated WebP animation frame chunk');
+    }
+    final chunkLength = _readUint32LittleEndian(payload, offset + 4);
+    final chunkStart = offset + 8;
+    final paddedLength = chunkLength + (chunkLength.isOdd ? 1 : 0);
+    final chunkEnd = chunkStart + paddedLength;
+    if (chunkEnd > payload.length) {
+      throw const FormatException('Invalid WebP animation frame chunk length');
+    }
+    final chunkPayload = Uint8List.sublistView(
+      payload,
+      chunkStart,
+      chunkStart + chunkLength,
+    );
+
+    if (_matchesAscii(payload, offset, 'ALPH')) {
+      if (sawAlpha || sawImage) {
+        throw const FormatException('Invalid WebP animation frame layout');
+      }
+      _addWebpChunk(output, 'ALPH', chunkPayload);
+      sawAlpha = true;
+    } else if (_matchesAscii(payload, offset, 'VP8 ')) {
+      if (sawImage) {
+        throw const FormatException('Invalid WebP animation frame layout');
+      }
+      _addWebpChunk(output, 'VP8 ', chunkPayload);
+      sawImage = true;
+    } else if (_matchesAscii(payload, offset, 'VP8L')) {
+      if (sawAlpha || sawImage) {
+        throw const FormatException('Invalid WebP animation frame layout');
+      }
+      _addWebpChunk(output, 'VP8L', chunkPayload);
+      sawImage = true;
+    }
+
+    offset = chunkEnd;
+  }
+
+  if (!sawImage) {
+    throw const FormatException('WebP animation frame is missing image data');
+  }
+  return output.takeBytes();
+}
+
+int? _readExifOrientation(
+  Uint8List bytes,
+  int payloadStart,
+  int payloadLength,
+) {
+  final payloadEnd = payloadStart + payloadLength;
+  var tiffStart = payloadStart;
+  if (payloadLength >= 6 &&
+      _matchesAscii(bytes, payloadStart, 'Exif') &&
+      bytes[payloadStart + 4] == 0 &&
+      bytes[payloadStart + 5] == 0) {
+    tiffStart += 6;
+  }
+  if (payloadEnd - tiffStart < 8) return null;
+
+  final endian = switch ((bytes[tiffStart], bytes[tiffStart + 1])) {
+    (0x49, 0x49) => Endian.little,
+    (0x4d, 0x4d) => Endian.big,
+    _ => null,
+  };
+  if (endian == null) return null;
+
+  int? readUint16(int offset) {
+    if (offset < tiffStart || offset + 2 > payloadEnd) return null;
+    return ByteData.sublistView(bytes, offset, offset + 2).getUint16(0, endian);
+  }
+
+  int? readUint32(int offset) {
+    if (offset < tiffStart || offset + 4 > payloadEnd) return null;
+    return ByteData.sublistView(bytes, offset, offset + 4).getUint32(0, endian);
+  }
+
+  if (readUint16(tiffStart + 2) != 42) return null;
+  final ifdOffset = readUint32(tiffStart + 4);
+  if (ifdOffset == null) return null;
+  final ifdStart = tiffStart + ifdOffset;
+  final entryCount = readUint16(ifdStart);
+  if (entryCount == null) return null;
+
+  final entriesStart = ifdStart + 2;
+  for (var index = 0; index < entryCount; index += 1) {
+    final entryStart = entriesStart + index * 12;
+    if (readUint16(entryStart) == 0x0112 &&
+        readUint16(entryStart + 2) == 3 &&
+        readUint32(entryStart + 4) == 1) {
+      return readUint16(entryStart + 8);
+    }
+  }
+  return null;
 }
 
 Uint8List _scrubGif(Uint8List bytes) {
@@ -194,12 +357,20 @@ Uint8List _scrubGif(Uint8List bytes) {
             if (bytes.length - offset < 12 || bytes[offset] != 11) {
               throw const FormatException('Invalid GIF application extension');
             }
-            final application = ascii.decode(
-              bytes.sublist(offset + 1, offset + 12),
-            );
-            offset = _gifSubBlocksEnd(bytes, offset + 12);
-            if (application == 'NETSCAPE2.0' || application == 'ANIMEXTS1.0') {
-              segments.add(Uint8List.sublistView(bytes, start, offset));
+            final isLoopExtension =
+                _matchesAscii(bytes, offset + 1, 'NETSCAPE2.0') ||
+                _matchesAscii(bytes, offset + 1, 'ANIMEXTS1.0');
+            final dataStart = offset + 12;
+            offset = _gifSubBlocksEnd(bytes, dataStart);
+            if (isLoopExtension) {
+              if (bytes.length - dataStart < 5 ||
+                  bytes[dataStart] != 3 ||
+                  bytes[dataStart + 1] != 1) {
+                throw const FormatException('Invalid GIF loop extension');
+              }
+              segments
+                ..add(Uint8List.sublistView(bytes, start, dataStart + 4))
+                ..add(Uint8List(1));
             }
           case 0x01:
             offset = _gifSubBlocksEnd(bytes, offset);
