@@ -221,7 +221,18 @@ test.describe("community rail", () => {
     page,
   }) => {
     await installMockBridge(page, undefined, { skipCommunitySeed: true });
-    await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
+    // Seed only if not already set so the persisted order survives page.reload().
+    await page.addInitScript(
+      ({ list, active }) => {
+        if (!window.localStorage.getItem("buzz-communities")) {
+          window.localStorage.setItem("buzz-communities", JSON.stringify(list));
+        }
+        if (!window.localStorage.getItem("buzz-active-community-id")) {
+          window.localStorage.setItem("buzz-active-community-id", active);
+        }
+      },
+      { list: [COMMUNITY_A, COMMUNITY_B], active: COMMUNITY_A.id },
+    );
     await page.goto("/");
 
     const buttonA = page.getByTestId(`community-rail-button-${COMMUNITY_A.id}`);
@@ -247,8 +258,6 @@ test.describe("community rail", () => {
     await page.mouse.up();
 
     // The community list in localStorage must now be [B, A].
-    // This proves the drag triggered reorderCommunities and saveCommunities —
-    // the two functions that guarantee restart persistence.
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -267,6 +276,28 @@ test.describe("community rail", () => {
     if (!newBoxA || !newBoxB)
       throw new Error("community buttons not laid out after drag");
     expect(newBoxB.y).toBeLessThan(newBoxA.y);
+
+    // Reload and confirm the order survives restart: addInitScript is
+    // conditional (no-op when data already exists), so the dragged [B, A]
+    // order is what React reads on boot.
+    await page.reload();
+    await expect(page.getByTestId("community-rail")).toBeVisible();
+
+    // Storage must still be [B, A] after reload.
+    const storedOrder = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("buzz-communities");
+      if (!raw) return null;
+      const list = JSON.parse(raw) as Array<{ id: string }>;
+      return list.map((c) => c.id);
+    });
+    expect(storedOrder).toEqual([COMMUNITY_B.id, COMMUNITY_A.id]);
+
+    // DOM order must also be [B, A] after reload.
+    const reloadBoxA = await buttonA.boundingBox();
+    const reloadBoxB = await buttonB.boundingBox();
+    if (!reloadBoxA || !reloadBoxB)
+      throw new Error("community buttons not laid out after reload");
+    expect(reloadBoxB.y).toBeLessThan(reloadBoxA.y);
   });
 
   test("keyboard reorder: Space to pick up, ArrowUp to move, Space to drop updates stored order", async ({
@@ -282,9 +313,12 @@ test.describe("community rail", () => {
     await expect(buttonB).toBeVisible();
 
     // Focus B (the second/lower item) and use keyboard to move it above A.
-    // Use page.evaluate to dispatch the keydown directly so React's synthetic
-    // onKeyDown fires first (and calls preventDefault before the browser fires
-    // the button's native click activation).
+    // Note: page.keyboard.press("Space") fires the button's native click on this
+    // Chromium build even when React's onKeyDown calls preventDefault — a CDP
+    // input-injection quirk. The synthetic dispatch below goes directly through
+    // React's event system where preventDefault correctly suppresses the click,
+    // while still exercising the real KeyboardSensor path (Thufir verified the
+    // test fails when KeyboardSensor is removed).
     await buttonB.focus();
     await page.evaluate((testId) => {
       const el = document.querySelector(`[data-testid="${testId}"]`);
@@ -298,11 +332,9 @@ test.describe("community rail", () => {
         }),
       );
     }, `community-rail-button-${COMMUNITY_B.id}`);
-    // Wait briefly for dnd-kit to register the drag-start.
-    await page.waitForTimeout(50);
     // ArrowUp moves the active item one slot up.
     await page.keyboard.press("ArrowUp");
-    // Space drops the item.
+    // Space drops the item — same synthetic dispatch for consistency.
     await page.evaluate((testId) => {
       const el = document.querySelector(`[data-testid="${testId}"]`);
       if (!el) throw new Error(`button not found: ${testId}`);
