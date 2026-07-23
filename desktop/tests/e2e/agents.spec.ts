@@ -413,6 +413,56 @@ test("the new team card offers create and import", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("team cards use the thread-style overlapping avatar stack", async ({
+  page,
+}) => {
+  const personaIds = ["custom:design", "custom:build", "custom:ship"];
+  await installMockBridge(page, {
+    personas: [
+      {
+        id: personaIds[0],
+        displayName: "Design",
+        systemPrompt: "You design interfaces.",
+      },
+      {
+        id: personaIds[1],
+        displayName: "Build",
+        systemPrompt: "You build interfaces.",
+      },
+      {
+        id: personaIds[2],
+        displayName: "Ship",
+        systemPrompt: "You ship interfaces.",
+      },
+    ],
+    teams: [
+      {
+        name: "Product crew",
+        personaIds,
+      },
+    ],
+  });
+  await gotoApp(page);
+  await page.getByTestId("open-agents-view").click();
+
+  const stack = page.getByLabel("Product crew member avatars");
+  const avatars = stack.locator('[data-team-member-avatar="avatar"]');
+  await expect(avatars).toHaveCount(3);
+  await expect(avatars.nth(1)).toHaveClass(/-ml-5/);
+  await expect(avatars.nth(2)).toHaveClass(/-ml-5/);
+
+  const boxes = await avatars.evaluateAll((elements) =>
+    elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, right: box.right };
+    }),
+  );
+  expect(boxes[1]?.left).toBeLessThan(boxes[0]?.right ?? 0);
+  expect(boxes[2]?.left).toBeLessThan(boxes[1]?.right ?? 0);
+  await expect(avatars.first()).not.toHaveCSS("mask-image", "none");
+  await expect(avatars.last()).toHaveCSS("mask-image", "none");
+});
+
 test("agent defaults stays in the header without an actions menu", async ({
   page,
 }) => {
